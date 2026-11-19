@@ -230,7 +230,7 @@ export default function Login() {
             />
           </div>
 
-          <h1 className="gold-title font-ubuntu text-center text-[27px] font-extrabold leading-tight tracking-[.11em] sm:text-[30px]">
+          <h1 className="gold-title font-ubuntu text-center text-[28px] font-extrabold leading-tight tracking-[.11em]">
             {titleText}
           </h1>
           <div className="gold-rule mx-auto mt-4 w-[82%]" />
