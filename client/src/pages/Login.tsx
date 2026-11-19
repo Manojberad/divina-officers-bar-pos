@@ -427,11 +427,11 @@ export default function Login() {
             )}
           </button>
 
-          <div className="mt-4 text-center">
+          <div className="mt-5 text-center">
             <button
               type="button"
               onClick={() => { setGMsg(null); setGuestOpen(true); }}
-              className="text-xs font-semibold tracking-wide text-[#f1dfbd]/90 underline decoration-[#ffc65c]/60 underline-offset-4 transition-colors hover:text-[#ffe8a0]"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#ffc65c]/55 bg-[#ffc65c]/15 px-5 py-2.5 text-[14px] font-bold tracking-wide text-[#ffe8a0] shadow-[0_0_16px_rgba(255,190,75,0.2)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#ffd77b] hover:bg-[#ffc65c]/25 hover:text-white hover:shadow-[0_0_22px_rgba(255,190,75,0.38)] active:scale-[0.98]"
             >
               Visiting Guest? Register for Bar Access →
             </button>
