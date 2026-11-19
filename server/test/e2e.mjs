@@ -11,7 +11,7 @@ process.env.DATA_DIR = tmp;
 
 const { app } = await import('../src/index.js');
 const { q, db } = await import('../src/db.js');
-const { expireApprovals } = await import('../src/services.js');
+const { expireApprovals, checkTdExpiries } = await import('../src/services.js');
 
 const server = http.createServer(app);
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -46,9 +46,17 @@ assert.equal((await req('/api/orders', { method: 'POST', token: custTok, body: {
 console.log('2. Users (Posted-In, TD, duplicate prevention, Excel import, 50-user cap)…');
 const dup = await req('/api/users', { method: 'POST', token: adminTok, body: { name: 'Dup', service_no: 'ic-51234', category: 'POSTED', role: 'member' } });
 assert.equal(dup.status, 400, 'Duplicate service_no rejected case-insensitively');
-const td = await req('/api/users', { method: 'POST', token: adminTok, body: { name: 'Capt TD Test', service_no: 'TD-2001', rank: 'Capt', category: 'TD', role: 'customer', pin: '9988' } });
+const td = await req('/api/users', { method: 'POST', token: adminTok, body: { name: 'Capt TD Test', service_no: 'TD-2001', rank: 'Capt', category: 'TD', role: 'customer', pin: '9988', td_start_date: '2026-01-01', td_end_date: '2026-02-02' } });
 assert.equal(td.status, 201);
-assert(await login('TD-2001', '9988'), 'TD officer logs in with assigned PIN');
+// Past completion date -> login blocked, expiry job notifies admin & deactivates
+assert.equal((await req('/api/auth/login', { method: 'POST', body: { service_no: 'TD-2001', pin: '9988', mode: 'member' } })).status, 403, 'Expired TD officer blocked from login');
+assert(checkTdExpiries() >= 1, 'Admin notified of expired TD officer');
+assert((await req('/api/admin/notifications', { token: adminTok })).data.some((n) => n.message.includes('TD-2001') && n.message.includes('expired')), 'Admin notification logged for TD expiry');
+// Admin extends TD membership by 15 custom days -> reactivates & allows login
+const ext = await req(`/api/users/${td.data.id}/extend-td`, { method: 'POST', token: adminTok, body: { days: 15 } });
+assert.equal(ext.status, 200);
+assert.equal(ext.data.active, 1);
+assert(await login('TD-2001', '9988'), 'Extended TD officer logs in with assigned PIN');
 
 // Excel import
 const wb = XLSX.utils.book_new();

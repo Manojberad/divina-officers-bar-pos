@@ -3,7 +3,7 @@ import { api, setToken, getToken } from './api';
 
 export type Role = 'admin' | 'member' | 'bartender' | 'customer' | 'guest';
 export interface AlcoholUsage { limit: number; used: number; remaining: number | null; scope: 'day' | 'order'; unit: 'pegs' | 'small_eq' }
-export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; alcohol_limit?: number | null; alcohol_usage?: AlcoholUsage; must_change_pin?: number }
+export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; alcohol_limit?: number | null; alcohol_usage?: AlcoholUsage; td_start_date?: string | null; td_end_date?: string | null; must_change_pin?: number }
 export interface Settings {
   bar_name: string; currency: string; logo: string; background: string; theme: string; accent: string; peg_sizes: string; approval_hours: string;
   guest_alcohol_limit?: string; member_alcohol_limit?: string; alcohol_limit_scope?: string; alcohol_limit_unit?: string;

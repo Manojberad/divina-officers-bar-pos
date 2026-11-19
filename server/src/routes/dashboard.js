@@ -64,12 +64,14 @@ r.get('/', requireRole('admin'), (req, res) => {
       COALESCE(SUM(CASE WHEN type IN ('reconcile','adjustment') AND qty>0 THEN qty*COALESCE(unit_cost,0) END),0) excess
     FROM stock_movements WHERE at>=? AND at<?`, F, T);
   const discrepancies = q.all(`SELECT r.*, p.name product FROM reconciliations r JOIN products p ON p.id=r.product_id WHERE r.diff<>0 AND r.at>=? AND r.at<? ORDER BY r.id DESC LIMIT 10`, F, T);
+  const tdSoon = new Date(Date.now() + 3 * 86400e3 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const pending = {
     active: q.get("SELECT COUNT(*) n FROM orders WHERE status IN ('placed','accepted','preparing','served')").n,
     disputed: q.get("SELECT COUNT(*) n FROM orders WHERE status='disputed'").n,
     awaiting_approval: q.get("SELECT COUNT(*) n FROM orders WHERE approval_status='pending'").n,
-    prebooked: q.get("SELECT COUNT(*) n FROM orders WHERE type='prebooked' AND status IN ('placed','accepted') AND scheduled_at>=?", tIso).n,
+    prebooked: q.get("SELECT COUNT(*) n FROM orders WHERE type='prebooked' AND status IN ('placed','accepted','draft') AND scheduled_at>=?", tIso).n,
     guest_requests: q.get("SELECT COUNT(*) n FROM users WHERE role='guest' AND approval_status='pending'").n,
+    td_expiring: q.get("SELECT COUNT(*) n FROM users WHERE category='TD' AND td_end_date IS NOT NULL AND td_end_date<=?", tdSoon).n,
   };
 
   const gpRows = q.all(`SELECT

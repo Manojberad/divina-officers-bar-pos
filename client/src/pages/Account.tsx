@@ -24,6 +24,9 @@ export default function Account() {
           <div><span className="text-gray-500">Service No:</span> <b>{user?.service_no}</b></div>
           <div><span className="text-gray-500">Category:</span> <b>{user?.category === 'STAFF' ? 'Mess Staff' : user?.category === 'GUEST' ? 'Guest' : user?.category === 'POSTED' ? 'Posted-In Officer' : user?.category === 'TD' ? 'TD Officer' : user?.category}</b></div>
           <div><span className="text-gray-500">Role:</span> <b className="capitalize">{user?.role}</b></div>
+          {user?.category === 'TD' && (user.td_start_date || user.td_end_date) && (
+            <div className="col-span-2"><span className="text-gray-500">TD Tenure:</span> <b>{user.td_start_date || '—'} → {user.td_end_date || '—'}</b></div>
+          )}
         </div>
       </Card>
       <Card title="Change PIN">

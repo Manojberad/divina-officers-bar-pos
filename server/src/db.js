@@ -147,6 +147,11 @@ const migrations = [
   `
   ALTER TABLE users ADD COLUMN alcohol_limit INTEGER;
   `,
+  // v6 – TD officer custom enrollment & completion dates
+  `
+  ALTER TABLE users ADD COLUMN td_start_date TEXT;
+  ALTER TABLE users ADD COLUMN td_end_date TEXT;
+  `,
 ];
 
 export function migrate() {

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { q, tx, now, getSettings, audit, notify } from './db.js';
 import { broadcast } from './events.js';
+import { localToday, tdValidity } from './auth.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -152,8 +153,12 @@ export function createOrder(body, user) {
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, 'Order has no items');
   let userId = user?.id ?? null;
   if (isStaff) userId = body.user_id ? Number(body.user_id) : null;
-  const targetUser = userId ? q.get("SELECT id, name, role, alcohol_limit FROM users WHERE id=? AND active=1 AND approval_status='approved'", userId) : null;
+  const targetUser = userId ? q.get("SELECT id, name, role, category, alcohol_limit, td_start_date, td_end_date FROM users WHERE id=? AND active=1 AND approval_status='approved'", userId) : null;
   if (userId && !targetUser) throw new HttpError(400, 'Unknown or unapproved customer');
+  if (targetUser) {
+    const tdv = tdValidity(targetUser);
+    if (!tdv.ok) throw new HttpError(403, tdv.message);
+  }
   let tableId = body.table_id ? Number(body.table_id) : null;
   if (body.table_code) {
     const t = q.get('SELECT id FROM tables WHERE code=? AND active=1', body.table_code);
@@ -376,6 +381,37 @@ export function checkPreorderReminders() {
       const hrTag = `⏰ Pre-Order #${o.order_no} due soon`;
       if (!q.get("SELECT id FROM notifications WHERE target_role='bartender' AND message LIKE ?", `${hrTag}%`)) {
         notify('bartender', null, `${hrTag} (${timeLabel} · ${who}) — move to Preparing now!`, '/orders');
+        sent++;
+      }
+    }
+  }
+  if (sent > 0) broadcast('notification', {});
+  return sent;
+}
+
+/** Auto-deactivate expired TD Officers and notify Admin of expiring/expired TD tenures. */
+export function checkTdExpiries() {
+  const today = localToday();
+  const [y, m, d] = today.split('-').map(Number);
+  const soonCutoff = new Date(Date.UTC(y, m - 1, d + 2)).toISOString().slice(0, 10);
+  const rows = q.all("SELECT id, name, rank, service_no, td_start_date, td_end_date, active FROM users WHERE category='TD' AND td_end_date IS NOT NULL");
+  let sent = 0;
+  for (const u of rows) {
+    const label = `${u.rank ? `${u.rank} ` : ''}${u.name} (${u.service_no})`;
+    if (u.td_end_date < today) {
+      if (u.active) {
+        q.run('UPDATE users SET active=0 WHERE id=?', u.id);
+        audit(null, 'user.td_expired', 'user', u.id, { td_end_date: u.td_end_date });
+      }
+      const tag = `🔴 TD Officer ${label} expired on ${u.td_end_date}`;
+      if (!q.get("SELECT id FROM notifications WHERE target_role='admin' AND message LIKE ?", `${tag}%`)) {
+        notify('admin', null, `${tag} — open Users to extend membership.`, '/users');
+        sent++;
+      }
+    } else if (u.active && u.td_end_date <= soonCutoff) {
+      const tag = `⏳ TD Officer ${label} expires on ${u.td_end_date}`;
+      if (!q.get("SELECT id FROM notifications WHERE target_role='admin' AND message LIKE ?", `${tag}%`)) {
+        notify('admin', null, `${tag} — extend membership if TD is continuing.`, '/users');
         sent++;
       }
     }

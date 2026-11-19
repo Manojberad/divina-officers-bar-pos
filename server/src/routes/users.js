@@ -2,18 +2,26 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { q, tx, audit, notify, now } from '../db.js';
-import { hashPin, verifyPin, requireRole, requireAuth } from '../auth.js';
+import { hashPin, verifyPin, requireRole, requireAuth, localToday } from '../auth.js';
 import { broadcast } from '../events.js';
 
 const r = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5e6 } });
 const MAX_USERS = 100;
 const ROLES = ['admin', 'member', 'bartender', 'customer', 'guest'];
-const COLS = 'id, name, service_no, rank, mobile, email, category, role, active, approval_status, approved_by, approved_at, alcohol_limit, must_change_pin, created_at';
+const COLS = 'id, name, service_no, rank, mobile, email, category, role, active, approval_status, approved_by, approved_at, alcohol_limit, td_start_date, td_end_date, must_change_pin, created_at';
 
 // Staff need a light customer list for the POS customer picker.
 r.get('/lookup', requireRole('admin', 'bartender'), (_req, res) => {
-  res.json(q.all("SELECT id, name, service_no, rank, role, category, alcohol_limit FROM users WHERE active=1 AND approval_status='approved' ORDER BY name"));
+  const t = localToday();
+  res.json(q.all(
+    `SELECT id, name, service_no, rank, role, category, alcohol_limit, td_start_date, td_end_date
+     FROM users
+     WHERE active=1 AND approval_status='approved'
+       AND (category<>'TD' OR ((td_start_date IS NULL OR td_start_date<=?) AND (td_end_date IS NULL OR td_end_date>=?)))
+     ORDER BY name`,
+    t, t,
+  ));
 });
 
 // Pending & recent guest registration requests (for Bartender approval & Admin visibility)
@@ -60,6 +68,9 @@ function validate(b, id) {
   const dup = q.get('SELECT id FROM users WHERE service_no=? COLLATE NOCASE AND id<>?', String(b.service_no).trim(), id || 0);
   if (dup) return `Service / Staff number ${b.service_no} already exists`;
   if (b.email && !/^\S+@\S+\.\S+$/.test(b.email)) return 'Invalid email';
+  if (b.td_start_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.td_start_date))) return 'Invalid TD enrollment date';
+  if (b.td_end_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.td_end_date))) return 'Invalid TD completion date';
+  if (b.td_start_date && b.td_end_date && String(b.td_end_date) < String(b.td_start_date)) return 'TD completion date must be on or after enrollment date';
   return null;
 }
 
@@ -73,9 +84,11 @@ function insertUser(b) {
   const category = role === 'bartender' ? 'STAFF' : role === 'guest' ? 'GUEST' : b.category || 'POSTED';
   // Posted-in officers: initial PIN = service number. TD / Mess Staff / Guest: admin assigned PIN (fallback service/staff number).
   const pin = ['TD', 'STAFF', 'GUEST'].includes(category) && b.pin ? String(b.pin) : sn;
+  const tdStart = category === 'TD' && b.td_start_date ? String(b.td_start_date) : null;
+  const tdEnd = category === 'TD' && b.td_end_date ? String(b.td_end_date) : null;
   const res = q.run(
-    "INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, alcohol_limit, must_change_pin, active, approval_status) VALUES(?,?,?,?,?,?,?,?,?,1,1,'approved')",
-    b.name.trim(), sn, b.rank || null, b.mobile ? String(b.mobile) : null, b.email || null, category, role, hashPin(pin), parseLimit(b.alcohol_limit),
+    "INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, alcohol_limit, td_start_date, td_end_date, must_change_pin, active, approval_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,1,'approved')",
+    b.name.trim(), sn, b.rank || null, b.mobile ? String(b.mobile) : null, b.email || null, category, role, hashPin(pin), parseLimit(b.alcohol_limit), tdStart, tdEnd,
   );
   return Number(res.lastInsertRowid);
 }
@@ -84,7 +97,7 @@ r.post('/', requireRole('admin'), (req, res) => {
   const err = validate(req.body);
   if (err) return res.status(400).json({ error: err });
   const id = insertUser(req.body);
-  audit(req.user.id, 'user.create', 'user', id, { service_no: req.body.service_no, role: req.body.role, category: req.body.category, alcohol_limit: req.body.alcohol_limit });
+  audit(req.user.id, 'user.create', 'user', id, { service_no: req.body.service_no, role: req.body.role, category: req.body.category, alcohol_limit: req.body.alcohol_limit, td_start_date: req.body.td_start_date, td_end_date: req.body.td_end_date });
   res.status(201).json(q.get(`SELECT ${COLS} FROM users WHERE id=?`, id));
 });
 
@@ -106,9 +119,37 @@ r.put('/:id', requireRole('admin'), (req, res) => {
         : ['STAFF', 'GUEST'].includes(b.category) ? 'POSTED' : b.category;
   const nextPinHash = b.pin ? hashPin(String(b.pin)) : nextSn !== u.service_no && verifyPin(u.service_no, u.pin_hash) ? hashPin(nextSn) : u.pin_hash;
   const nextLimit = req.body.alcohol_limit !== undefined ? parseLimit(req.body.alcohol_limit) : u.alcohol_limit;
-  q.run('UPDATE users SET name=?, service_no=?, rank=?, mobile=?, email=?, category=?, role=?, pin_hash=?, alcohol_limit=?, active=? WHERE id=?',
-    b.name.trim(), nextSn, b.rank, b.mobile, b.email, nextCategory, b.role, nextPinHash, nextLimit, Number(b.active) ? 1 : 0, id);
+  const tdStart = nextCategory === 'TD' ? (b.td_start_date ? String(b.td_start_date) : null) : null;
+  const tdEnd = nextCategory === 'TD' ? (b.td_end_date ? String(b.td_end_date) : null) : null;
+  q.run('UPDATE users SET name=?, service_no=?, rank=?, mobile=?, email=?, category=?, role=?, pin_hash=?, alcohol_limit=?, td_start_date=?, td_end_date=?, active=? WHERE id=?',
+    b.name.trim(), nextSn, b.rank, b.mobile, b.email, nextCategory, b.role, nextPinHash, nextLimit, tdStart, tdEnd, Number(b.active) ? 1 : 0, id);
   audit(req.user.id, 'user.update', 'user', id, req.body);
+  res.json(q.get(`SELECT ${COLS} FROM users WHERE id=?`, id));
+});
+
+// Admin extends a TD Officer's membership by custom days or sets a new completion date (also reactivates if expired)
+r.post('/:id/extend-td', requireRole('admin'), (req, res) => {
+  const id = Number(req.params.id);
+  const u = q.get("SELECT * FROM users WHERE id=? AND category='TD'", id);
+  if (!u) return res.status(404).json({ error: 'TD Officer not found' });
+  const today = localToday();
+  let nextEnd = null;
+  const days = req.body?.days != null && req.body.days !== '' ? Math.floor(Number(req.body.days)) : null;
+  if (req.body?.td_end_date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.body.td_end_date))) return res.status(400).json({ error: 'Invalid date' });
+    nextEnd = String(req.body.td_end_date);
+    if (u.td_start_date && nextEnd < u.td_start_date) return res.status(400).json({ error: 'Completion date cannot be before enrollment date' });
+  } else if (days && days > 0) {
+    const baseStr = u.td_end_date && u.td_end_date >= today ? u.td_end_date : today;
+    const [y, m, d] = baseStr.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + days));
+    nextEnd = dt.toISOString().slice(0, 10);
+  } else {
+    return res.status(400).json({ error: 'Provide positive custom days or a new completion date' });
+  }
+  const nextStart = u.td_start_date || today;
+  q.run('UPDATE users SET td_start_date=?, td_end_date=?, active=1 WHERE id=?', nextStart, nextEnd, id);
+  audit(req.user.id, 'user.td_extend', 'user', id, { from: u.td_end_date, to: nextEnd, days });
   res.json(q.get(`SELECT ${COLS} FROM users WHERE id=?`, id));
 });
 

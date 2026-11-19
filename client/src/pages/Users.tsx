@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app';
-import { Badge, Button, Card, Field, Input, Modal, Select } from '../components/ui';
+import { Badge, Button, Card, Field, Input, Modal, Select, today } from '../components/ui';
 
-const BLANK = { name: '', service_no: '', rank: '', mobile: '', email: '', category: 'POSTED', role: 'member', pin: '', alcohol_limit: '', active: 1 };
+const BLANK = { name: '', service_no: '', rank: '', mobile: '', email: '', category: 'POSTED', role: 'member', pin: '', alcohol_limit: '', td_start_date: '', td_end_date: '', active: 1 };
 
 const CAT_LABEL: Record<string, string> = {
   POSTED: 'Posted-In Officer',
@@ -25,6 +25,9 @@ export default function Users() {
   const [ed, setEd] = useState<any>(null);
   const [pinModal, setPinModal] = useState<any>(null);
   const [newPin, setNewPin] = useState('');
+  const [extendModal, setExtendModal] = useState<any>(null);
+  const [extendDays, setExtendDays] = useState('15');
+  const [extendDate, setExtendDate] = useState('');
   const [guestLimitVal, setGuestLimitVal] = useState(settings.guest_alcohol_limit ?? '3');
   const [memberLimitVal, setMemberLimitVal] = useState(settings.member_alcohol_limit ?? '0');
 
@@ -80,6 +83,19 @@ export default function Users() {
     try { const r = await api(`/users/${pinModal.id}/reset-pin`, { method: 'POST', body: { pin: newPin || undefined } }); toast(r.message); setPinModal(null); setNewPin(''); } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const submitExtendTd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendModal) return;
+    try {
+      const body = extendDate ? { td_end_date: extendDate } : { days: Number(extendDays) };
+      const u = await api(`/users/${extendModal.id}/extend-td`, { method: 'POST', body });
+      toast(`TD membership extended until ${u.td_end_date} (active)`);
+      setExtendModal(null);
+      setExtendDate('');
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
   const onRoleChange = (role: string) => {
     if (role === 'bartender') {
       setEd({ ...ed, role, category: 'STAFF', rank: ed.rank || 'Mess Staff' });
@@ -104,11 +120,39 @@ export default function Users() {
     }
   };
 
+  const todayStr = today();
+  const tdAlerts = users.filter((u) => {
+    if (u.category !== 'TD' || !u.td_end_date) return false;
+    const diffDays = Math.ceil((Date.parse(`${u.td_end_date}T23:59:59`) - Date.now()) / 86400e3);
+    return diffDays <= 3;
+  });
+
   const pendingGuests = users.filter((u) => u.role === 'guest' && u.approval_status === 'pending');
   const memberCount = users.filter((u) => u.role !== 'guest').length;
 
   return (
     <div className="space-y-4 p-4">
+      {/* Expiring / Expired TD Officers Alert Panel */}
+      {tdAlerts.length > 0 && (
+        <Card title={`🗓 TD Officer Tenure Alerts (${tdAlerts.length})`} className="!border-[#F97316]">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {tdAlerts.map((u) => {
+              const expired = u.td_end_date < todayStr;
+              return (
+                <div key={u.id} className="flex items-center justify-between gap-2 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
+                  <div className="min-w-0">
+                    <div className="truncate font-bold">{u.rank} {u.name} <span className="text-xs text-[#94A3B8]">({u.service_no})</span></div>
+                    <div className={`text-xs font-semibold ${expired ? 'text-[#EE5D50]' : 'text-[#F97316]'}`}>
+                      {expired ? `Expired on ${u.td_end_date}` : `Expires on ${u.td_end_date}`}
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={() => { setExtendModal(u); setExtendDays('15'); setExtendDate(''); }}>+ Extend</Button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
       {/* Admin Alcohol Order Limit Controls (Guest & Member) */}
       <Card title="🥃 Alcohol Order Limits (Small 30ml / Large 60ml)">
         <div className="flex flex-wrap items-end gap-4">
@@ -172,7 +216,7 @@ export default function Users() {
             <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'STAFF', role: 'bartender', rank: 'Mess Staff' })}>
               + Add Mess Staff (Bartender)
             </Button>
-            <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'TD', role: 'customer' })}>
+            <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'TD', role: 'customer', td_start_date: todayStr })}>
               + Register TD Officer
             </Button>
             <Button onClick={() => setEd({ ...BLANK })}>+ Add Posted-In Officer</Button>
@@ -185,7 +229,7 @@ export default function Users() {
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
-              <tr><th className="p-2">Name</th><th>Service / Staff No</th><th>Rank / Designation</th><th>Category</th><th>Role</th><th>Alcohol Limit</th><th>Mobile</th><th>Status</th><th /></tr>
+              <tr><th className="p-2">Name</th><th>Service / Staff No</th><th>Rank / Designation</th><th>Category</th><th>Role</th><th>TD Tenure</th><th>Alcohol Limit</th><th>Status</th><th /></tr>
             </thead>
             <tbody>
               {users.map((u) => {
@@ -201,6 +245,8 @@ export default function Users() {
                       : ['member', 'customer'].includes(u.role) && Number(settings.member_alcohol_limit || 0) > 0
                         ? `Default (${settings.member_alcohol_limit})`
                         : '—';
+                const tdExpired = u.category === 'TD' && u.td_end_date && u.td_end_date < todayStr;
+                const tdUpcoming = u.category === 'TD' && u.td_start_date && u.td_start_date > todayStr;
                 return (
                 <tr key={u.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
                   <td className="p-2 font-bold">{u.name}</td>
@@ -208,12 +254,27 @@ export default function Users() {
                   <td>{u.rank || '—'}</td>
                   <td><Badge s={CAT_BADGE[u.category] || 'accepted'}>{CAT_LABEL[u.category] || u.category}</Badge></td>
                   <td className="capitalize">{u.role}</td>
+                  <td className="text-xs">
+                    {u.category === 'TD' ? (
+                      u.td_start_date || u.td_end_date ? (
+                        <span className={tdExpired ? 'font-bold text-[#EE5D50]' : 'font-semibold'}>
+                          {u.td_start_date || '—'} → {u.td_end_date || '—'}
+                        </span>
+                      ) : <span className="text-[#94A3B8]">Not set</span>
+                    ) : '—'}
+                  </td>
                   <td className="text-xs font-semibold text-[#422AFB] dark:text-[#818CF8]">{eff}</td>
-                  <td>{u.mobile || '—'}</td>
-                  <td>{u.approval_status === 'pending' ? <Badge s="pending">pending approval</Badge> : u.approval_status === 'rejected' ? <Badge s="cancelled">declined</Badge> : u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}</td>
-                  <td className="space-x-1 text-right">
+                  <td>
+                    {u.approval_status === 'pending' ? <Badge s="pending">pending approval</Badge>
+                      : u.approval_status === 'rejected' ? <Badge s="cancelled">declined</Badge>
+                        : tdExpired ? <Badge s="cancelled">TD expired</Badge>
+                          : tdUpcoming ? <Badge s="pending">starts {u.td_start_date}</Badge>
+                            : u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}
+                  </td>
+                  <td className="space-x-1 whitespace-nowrap text-right">
                     {u.role === 'guest' && u.approval_status === 'pending' && <Button size="sm" variant="success" onClick={() => approveGuest(u, 'approve')}>Approve</Button>}
-                    <Button size="sm" variant="subtle" onClick={() => setEd({ ...u, alcohol_limit: u.alcohol_limit ?? '' })}>Edit</Button>
+                    {u.category === 'TD' && <Button size="sm" variant="primary" onClick={() => { setExtendModal(u); setExtendDays('15'); setExtendDate(''); }}>Extend</Button>}
+                    <Button size="sm" variant="subtle" onClick={() => setEd({ ...u, alcohol_limit: u.alcohol_limit ?? '', td_start_date: u.td_start_date ?? '', td_end_date: u.td_end_date ?? '' })}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => { setPinModal(u); setNewPin(''); }}>PIN</Button>
                     <Button size="sm" variant="ghost" onClick={async () => { if (confirm('Remove user?')) { await api(`/users/${u.id}`, { method: 'DELETE' }); load(); } }}>✕</Button>
                   </td>
@@ -268,6 +329,16 @@ export default function Users() {
                 </Select>
               )}
             </Field>
+            {ed.category === 'TD' && (
+              <>
+                <Field label="TD Enrollment Date">
+                  <Input type="date" value={ed.td_start_date || ''} onChange={(e) => setEd({ ...ed, td_start_date: e.target.value })} required />
+                </Field>
+                <Field label="TD Completion Date">
+                  <Input type="date" value={ed.td_end_date || ''} min={ed.td_start_date || undefined} onChange={(e) => setEd({ ...ed, td_end_date: e.target.value })} required />
+                </Field>
+              </>
+            )}
             {!ed.id && (ed.category === 'TD' || ed.category === 'STAFF' || ed.category === 'GUEST') && (
               <Field label={`Initial PIN (blank = ${ed.category === 'STAFF' ? 'Staff ID' : 'Service No'})`}>
                 <Input value={ed.pin || ''} onChange={(e) => setEd({ ...ed, pin: e.target.value })} />
@@ -296,6 +367,34 @@ export default function Users() {
           <Input value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder={pinModal?.service_no} />
         </Field>
         <div className="mt-3 flex justify-end"><Button onClick={resetPin}>Reset PIN</Button></div>
+      </Modal>
+
+      <Modal open={!!extendModal} onClose={() => setExtendModal(null)} title={`Extend TD Membership – ${extendModal?.rank || ''} ${extendModal?.name || ''}`}>
+        {extendModal && (
+          <form onSubmit={submitExtendTd} className="space-y-4">
+            <div className="rounded-2xl bg-[#F4F7FE] p-3 text-xs dark:bg-[#252D3D]">
+              <div>Service No: <b>{extendModal.service_no}</b></div>
+              <div className="mt-1">Current TD Tenure: <b>{extendModal.td_start_date || '—'} → {extendModal.td_end_date || 'Not set'}</b></div>
+            </div>
+            <Field label="Extend by Custom Days">
+              <div className="flex flex-wrap gap-2">
+                <Input type="number" min={1} max={365} value={extendDays} onChange={(e) => { setExtendDays(e.target.value); setExtendDate(''); }} className="!w-28" />
+                {['7', '15', '30', '60'].map((d) => (
+                  <Button key={d} type="button" size="sm" variant={!extendDate && extendDays === d ? 'primary' : 'subtle'} onClick={() => { setExtendDays(d); setExtendDate(''); }}>
+                    +{d} days
+                  </Button>
+                ))}
+              </div>
+            </Field>
+            <Field label="…or choose an exact New Completion Date">
+              <Input type="date" value={extendDate} min={extendModal.td_start_date || undefined} onChange={(e) => setExtendDate(e.target.value)} />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setExtendModal(null)}>Cancel</Button>
+              <Button type="submit">Extend &amp; Reactivate</Button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );

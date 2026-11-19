@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { q, audit, notify, now } from '../db.js';
-import { hashPin, verifyPin, signToken, requireAuth } from '../auth.js';
+import { hashPin, verifyPin, signToken, requireAuth, tdValidity } from '../auth.js';
 import { broadcast } from '../events.js';
 import { getAlcoholUsage } from '../services.js';
 
@@ -35,6 +35,8 @@ r.post('/login', (req, res) => {
       if (candidate.role === 'guest' && candidate.approval_status === 'rejected') {
         return res.status(403).json({ error: 'Your guest registration was declined by the bartender' });
       }
+      const tdv = tdValidity(candidate);
+      if (!tdv.ok) return res.status(403).json({ error: tdv.message });
       if (candidate.active && candidate.approval_status === 'approved') u = candidate;
     }
   } else {
@@ -146,7 +148,7 @@ r.get('/guest-status/:service_no', (req, res) => {
 });
 
 r.get('/me', requireAuth, (req, res) => {
-  const u = q.get('SELECT id, name, service_no, rank, mobile, email, category, role, approval_status, alcohol_limit, must_change_pin FROM users WHERE id=?', req.user.id);
+  const u = q.get('SELECT id, name, service_no, rank, mobile, email, category, role, approval_status, alcohol_limit, td_start_date, td_end_date, must_change_pin FROM users WHERE id=?', req.user.id);
   res.json({ ...u, alcohol_usage: getAlcoholUsage(u) });
 });
 

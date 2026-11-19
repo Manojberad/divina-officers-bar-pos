@@ -98,8 +98,13 @@ export default function Dashboard() {
       </div>
 
       {/* Quick Action Alert Banners */}
-      {(d.pending.disputed > 0 || d.alerts.length > 0 || d.pending.prebooked > 0 || d.pending.guest_requests > 0) && (
+      {(d.pending.disputed > 0 || d.alerts.length > 0 || d.pending.prebooked > 0 || d.pending.guest_requests > 0 || d.pending.td_expiring > 0) && (
         <div className="flex flex-wrap gap-3">
+          {d.pending.td_expiring > 0 && (
+            <Link to="/users" className="inline-flex items-center gap-2 rounded-2xl bg-[#F97316] px-4 py-2.5 text-xs font-bold text-white shadow-md">
+              🗓 {d.pending.td_expiring} TD officer(s) expiring / expired — extend
+            </Link>
+          )}
           {d.pending.guest_requests > 0 && (
             <Link to="/users" className="inline-flex items-center gap-2 rounded-2xl bg-[#38BDF8] px-4 py-2.5 text-xs font-bold text-[#0F172A] shadow-md">
               🪪 {d.pending.guest_requests} pending guest registration(s)
