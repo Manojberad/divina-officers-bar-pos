@@ -239,10 +239,80 @@ export default function Login() {
             />
           </div>
 
-          <h1 className="gold-title font-ubuntu text-center text-[28px] font-extrabold leading-tight tracking-[.11em]">
-            {titleText}
-          </h1>
-          <div className="gold-rule mx-auto mt-4 w-[82%]" />
+          {/* Winged Metallic Gold Title Emblem */}
+          <div className="flex items-center justify-center gap-2.5 sm:gap-3">
+            {/* Left 3-Bar Tapered Gold Wing */}
+            <svg viewBox="0 0 64 26" className="h-5 w-11 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
+              <defs>
+                <linearGradient id="wingGoldL" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#fff6cc" />
+                  <stop offset="45%" stopColor="#f8c146" />
+                  <stop offset="75%" stopColor="#b97714" />
+                  <stop offset="100%" stopColor="#ffe38f" />
+                </linearGradient>
+              </defs>
+              <polygon points="0,2 64,2 64,7 8,7" fill="url(#wingGoldL)" />
+              <polygon points="14,11 64,11 64,15.5 21,15.5" fill="url(#wingGoldL)" />
+              <polygon points="27,19.5 64,19.5 64,24 33,24" fill="url(#wingGoldL)" />
+            </svg>
+
+            <h1 className="gold-title font-ubuntu whitespace-nowrap text-center text-[21px] font-extrabold uppercase leading-none tracking-[.06em] sm:text-[26px]">
+              {titleText}
+            </h1>
+
+            {/* Right 3-Bar Tapered Gold Wing (Mirrored) */}
+            <svg viewBox="0 0 64 26" className="h-5 w-11 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
+              <defs>
+                <linearGradient id="wingGoldR" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#fff6cc" />
+                  <stop offset="45%" stopColor="#f8c146" />
+                  <stop offset="75%" stopColor="#b97714" />
+                  <stop offset="100%" stopColor="#ffe38f" />
+                </linearGradient>
+              </defs>
+              <polygon points="0,2 64,2 56,7 0,7" fill="url(#wingGoldR)" />
+              <polygon points="0,11 50,11 43,15.5 0,15.5" fill="url(#wingGoldR)" />
+              <polygon points="0,19.5 37,19.5 31,24 0,24" fill="url(#wingGoldR)" />
+            </svg>
+          </div>
+
+          {/* Tapered Gold Divider with Center 5-Point Star */}
+          <div className="mx-auto mt-3 flex w-[84%] items-center justify-center gap-2.5" aria-hidden="true">
+            <svg viewBox="0 0 140 8" className="h-2 flex-1" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="lineGoldL" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#ffd77b" stopOpacity="0" />
+                  <stop offset="65%" stopColor="#e6a938" stopOpacity="0.85" />
+                  <stop offset="100%" stopColor="#fff2be" stopOpacity="1" />
+                </linearGradient>
+              </defs>
+              <path d="M0 4 L132 3.2 L140 4 L132 4.8 Z" fill="url(#lineGoldL)" />
+              <circle cx="133" cy="4" r="2.2" fill="#ffe69a" />
+            </svg>
+
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 drop-shadow-[0_0_8px_rgba(255,196,75,0.75)]">
+              <defs>
+                <linearGradient id="starGold" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#fff7cc" />
+                  <stop offset="50%" stopColor="#ffc347" />
+                  <stop offset="100%" stopColor="#c47e14" />
+                </linearGradient>
+              </defs>
+              <path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z" fill="url(#starGold)" />
+            </svg>
+
+            <svg viewBox="0 0 140 8" className="h-2 flex-1" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="lineGoldR" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#fff2be" stopOpacity="1" />
+                  <stop offset="35%" stopColor="#e6a938" stopOpacity="0.85" />
+                  <stop offset="100%" stopColor="#ffd77b" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <path d="M0 4 L8 3.2 L140 4 L8 4.8 Z" fill="url(#lineGoldR)" />
+              <circle cx="7" cy="4" r="2.2" fill="#ffe69a" />
+            </svg>
+          </div>
 
           <div className="mt-4 text-center">
             <h2 className="text-[23px] font-bold tracking-tight text-[#fffaf0]">
@@ -435,12 +505,6 @@ export default function Login() {
             >
               Visiting Guest? Register for Bar Access →
             </button>
-          </div>
-
-          <div className="mt-4 flex items-center justify-center gap-2 text-[9px] font-semibold tracking-[.24em] text-[#d7b66f]">
-            <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#b98a39]/70" />
-            <span>GOOD TIMES&nbsp; • &nbsp;GREAT COMPANY&nbsp; • &nbsp;OFFICERS' BAR</span>
-            <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#b98a39]/70" />
           </div>
         </form>
       </div>
