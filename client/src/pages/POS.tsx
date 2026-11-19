@@ -135,13 +135,20 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             </Select>
           </div>
         )}
-        {(staff || user?.role === 'member') && mode !== 'qr' && (
-          <div className="flex gap-2">
-            <Select value={opts.type} onChange={(e) => setOpts({ ...opts, type: e.target.value })} className="!w-40">
+        {(staff || user?.role === 'member') && (
+          <div className="space-y-2">
+            <Select value={opts.type} onChange={(e) => setOpts({ ...opts, type: e.target.value })}>
               <option value="ondemand">Order Now</option>
-              <option value="prebooked">Pre-Order</option>
+              <option value="prebooked">Pre-Order (Schedule Date & Time)</option>
             </Select>
-            {opts.type === 'prebooked' && <Input type="datetime-local" value={opts.scheduled_at} onChange={(e) => setOpts({ ...opts, scheduled_at: e.target.value })} />}
+            {opts.type === 'prebooked' && (
+              <Input
+                type="datetime-local"
+                value={opts.scheduled_at}
+                onChange={(e) => setOpts({ ...opts, scheduled_at: e.target.value })}
+                aria-label="Pre-Order date and time"
+              />
+            )}
           </div>
         )}
         <Input placeholder="Order notes (e.g. on the rocks)" value={opts.notes} onChange={(e) => setOpts({ ...opts, notes: e.target.value })} />
