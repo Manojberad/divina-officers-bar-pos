@@ -15,6 +15,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [shake, setShake] = useState(false);
+  const [focusedField, setFocusedField] = useState<'sn' | 'pin' | null>(null);
 
   const bgImg = !settings.background || /^\/Login_bg\.(jpg|png|webp)$/i.test(settings.background) ? '/Login_bg.webp' : settings.background;
   const logoImg = settings.logo || '/Login_logo.png';
@@ -61,43 +62,138 @@ export default function Login() {
       <style>{`
         .login-scene { isolation:isolate; }
         .login-panel {
-          background:linear-gradient(145deg,rgba(12,23,39,.88),rgba(3,9,19,.92));
+          background:linear-gradient(145deg,rgba(12,23,39,.88),rgba(3,9,19,.93));
           border:1px solid rgba(255,198,82,.62);
           box-shadow:0 0 0 1px rgba(255,220,139,.12),0 0 24px rgba(255,174,46,.2),0 24px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12);
-          animation:panel-arrive .9s cubic-bezier(.2,.8,.2,1) both;
+          animation:panel-arrive .85s cubic-bezier(.2,.8,.2,1) both;
+          transition:border-color .35s ease, box-shadow .35s ease;
+        }
+        .login-panel:hover {
+          border-color:rgba(255,210,110,.82);
+          box-shadow:0 0 0 1px rgba(255,224,150,.2),0 0 32px rgba(255,178,52,.28),0 28px 86px rgba(0,0,0,.62),inset 0 1px 0 rgba(255,255,255,.16);
         }
         .gold-title {
           color:#ffd77b; text-shadow:0 0 10px rgba(255,183,55,.4),0 2px 18px rgba(255,165,35,.22);
-          background:linear-gradient(100deg,#fff1bd 0%,#ffc247 48%,#fff0b5 100%);
+          background:linear-gradient(100deg,#fff1bd 0%,#ffc247 45%,#fff4cc 55%,#ffc247 100%);
+          background-size:220% auto;
           -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+          animation:title-sheen 6s linear infinite;
         }
-        .gold-rule { height:1px; background:linear-gradient(90deg,transparent,#d99b36,#fff0b3,#d99b36,transparent); box-shadow:0 0 9px rgba(255,190,75,.65); }
+        .gold-rule {
+          position:relative; height:1px; overflow:hidden;
+          background:linear-gradient(90deg,transparent,#d99b36,#fff0b3,#d99b36,transparent);
+          box-shadow:0 0 9px rgba(255,190,75,.65);
+        }
+        .gold-rule::after {
+          content:""; position:absolute; top:0; left:-40%; width:40%; height:100%;
+          background:linear-gradient(90deg,transparent,#ffffff,transparent);
+          animation:rule-glint 3.6s ease-in-out infinite;
+        }
+        .input-shell {
+          position:relative; transition:transform .22s cubic-bezier(.22,1,.36,1);
+        }
+        .input-shell.focused { transform:translateY(-1px); }
         .gold-input {
-          color:#fff8e8; background:rgba(2,9,19,.72); border:1px solid rgba(255,211,130,.35);
-          box-shadow:inset 0 2px 8px rgba(0,0,0,.28); transition:border-color .25s,box-shadow .25s,background .25s;
+          color:#fff8e8; background:rgba(2,9,19,.74); border:1px solid rgba(255,211,130,.35);
+          box-shadow:inset 0 2px 8px rgba(0,0,0,.28);
+          transition:border-color .25s ease,box-shadow .25s ease,background .25s ease;
         }
+        .gold-input:hover:not(:focus) { border-color:rgba(255,211,130,.58); background:rgba(5,13,25,.82); }
         .gold-input::placeholder { color:rgba(224,222,215,.48); }
-        .gold-input:focus { outline:none; border-color:#ffc65c; background:rgba(6,15,28,.92); box-shadow:0 0 0 3px rgba(255,190,70,.13),0 0 18px rgba(255,184,55,.2); }
-        .gold-button {
-          color:#211506; background:linear-gradient(110deg,#ffe8a0,#ffc34e 48%,#f4a923);
-          box-shadow:0 0 14px rgba(255,179,48,.36),inset 0 1px 0 rgba(255,255,255,.8);
-          transition:transform .2s,box-shadow .25s,filter .25s;
+        .gold-input:focus {
+          outline:none; border-color:#ffc65c; background:rgba(6,15,28,.94);
+          box-shadow:0 0 0 3px rgba(255,190,70,.16),0 0 22px rgba(255,184,55,.24);
         }
-        .gold-button:hover { transform:translateY(-2px); filter:brightness(1.08); box-shadow:0 0 25px rgba(255,186,57,.62),0 8px 22px rgba(0,0,0,.25),inset 0 1px 0 #fff; }
-        .gold-button:active { transform:translateY(0) scale(.985); }
-        .mode-button { border:1px solid rgba(255,218,148,.16); background:rgba(255,255,255,.055); color:#e9e5dc; transition:all .25s ease; }
-        .mode-button:hover { border-color:rgba(255,205,107,.5); background:rgba(255,196,82,.09); }
-        .mode-button.active { color:#2b1b06; border-color:#ffe2a0; background:linear-gradient(110deg,#ffe8a0,#ffc34e); box-shadow:0 0 16px rgba(255,185,55,.38),inset 0 1px 0 #fff; }
-        .crest-glow { filter:drop-shadow(0 0 16px rgba(255,190,75,.22)); transition:transform .5s,filter .5s; }
-        .crest-glow:hover { transform:translateY(-4px) scale(1.035); filter:drop-shadow(0 0 24px rgba(255,190,75,.55)); }
+        /* Shimmering Gold Login Button */
+        .gold-button {
+          position:relative; overflow:hidden;
+          color:#211506;
+          background:linear-gradient(110deg,#ffe8a0 0%,#ffc34e 46%,#f4a923 100%);
+          box-shadow:0 0 16px rgba(255,179,48,.38),inset 0 1px 0 rgba(255,255,255,.85);
+          transition:transform .22s cubic-bezier(.22,1,.36,1),box-shadow .25s ease,filter .25s ease;
+        }
+        .gold-button::before {
+          content:""; position:absolute; top:-20%; left:-75%; width:50%; height:140%;
+          background:linear-gradient(105deg,transparent 0%,rgba(255,255,255,.15) 30%,rgba(255,255,255,.78) 50%,rgba(255,255,255,.15) 70%,transparent 100%);
+          transform:skewX(-22deg);
+          animation:btn-shimmer 2.8s cubic-bezier(.4,0,.2,1) infinite;
+          pointer-events:none;
+        }
+        .gold-button:hover {
+          transform:translateY(-2px); filter:brightness(1.07);
+          box-shadow:0 0 28px rgba(255,186,57,.68),0 10px 24px rgba(0,0,0,.32),inset 0 1px 0 #fff;
+        }
+        .gold-button:hover::before { animation-duration:1.45s; }
+        .gold-button:active { transform:translateY(0) scale(.975); }
+        .gold-button .btn-arrow { transition:transform .25s cubic-bezier(.22,1,.36,1); }
+        .gold-button:hover .btn-arrow { transform:translateX(4px); }
+
+        /* Sliding Segmented Mode Switcher */
+        .mode-track {
+          position:relative; display:grid; grid-template-columns:1fr 1fr; padding:4px;
+          border-radius:14px; background:rgba(255,255,255,.055);
+          border:1px solid rgba(255,218,148,.2);
+        }
+        .mode-pill {
+          position:absolute; top:4px; bottom:4px; left:4px; width:calc(50% - 4px);
+          border-radius:10px;
+          background:linear-gradient(110deg,#ffe8a0,#ffc34e);
+          box-shadow:0 0 16px rgba(255,185,55,.4),inset 0 1px 0 #fff;
+          transition:transform .32s cubic-bezier(.34,1.3,.64,1);
+        }
+        .mode-pill.admin { transform:translateX(100%); }
+        .mode-tab {
+          position:relative; z-index:1; display:flex; align-items:center; justify-content:center;
+          gap:8px; padding:10px 10px; border-radius:10px; font-size:14px; font-weight:700;
+          color:#e9e5dc; transition:color .25s ease, transform .18s ease;
+        }
+        .mode-tab:hover:not(.active) { color:#fff5db; }
+        .mode-tab:active { transform:scale(.97); }
+        .mode-tab.active { color:#241604; }
+        .mode-tab .tab-icon { transition:transform .3s cubic-bezier(.34,1.56,.64,1); }
+        .mode-tab:hover .tab-icon-user { transform:scale(1.14) translateY(-1px); }
+        .mode-tab:hover .tab-icon-gear, .mode-tab.active .tab-icon-gear { transform:rotate(45deg) scale(1.1); }
+
+        .crest-glow {
+          filter:drop-shadow(0 0 16px rgba(255,190,75,.24));
+          animation:crest-float 4.8s ease-in-out infinite;
+          transition:transform .45s cubic-bezier(.22,1,.36,1),filter .45s ease;
+        }
+        .crest-glow:hover {
+          transform:translateY(-4px) scale(1.06) rotate(2deg);
+          filter:drop-shadow(0 0 28px rgba(255,196,84,.62));
+        }
+        .field-check { animation:pop-in .24s cubic-bezier(.34,1.56,.64,1) both; }
+
+        @keyframes btn-shimmer {
+          0% { left:-75%; }
+          55%, 100% { left:135%; }
+        }
+        @keyframes title-sheen {
+          0% { background-position:0% center; }
+          100% { background-position:220% center; }
+        }
+        @keyframes rule-glint {
+          0%, 100% { left:-40%; opacity:0; }
+          20% { opacity:1; }
+          55% { left:115%; opacity:0; }
+        }
+        @keyframes crest-float {
+          0%, 100% { transform:translateY(0); }
+          50% { transform:translateY(-4px); }
+        }
+        @keyframes pop-in {
+          from { opacity:0; transform:scale(.5); }
+          to { opacity:1; transform:scale(1); }
+        }
         @keyframes panel-arrive { from { opacity:0; transform:translateY(22px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
-        @keyframes soft-pulse { 0%,100% { box-shadow:0 0 12px rgba(255,181,58,.25); } 50% { box-shadow:0 0 23px rgba(255,181,58,.48); } }
+        @keyframes soft-pulse { 0%,100% { box-shadow:0 0 14px rgba(255,181,58,.28); } 50% { box-shadow:0 0 26px rgba(255,181,58,.52); } }
         @keyframes wave { 0%,60%,100% { transform:rotate(0); } 10%,30% { transform:rotate(14deg); } 20% { transform:rotate(-8deg); } 40% { transform:rotate(8deg); } }
         .welcome-wave { display:inline-block; transform-origin:70% 70%; animation:wave 2.8s ease-in-out infinite; }
         .login-submit { animation:soft-pulse 3.2s ease-in-out infinite; }
         @media (prefers-reduced-motion:reduce) {
-          .welcome-wave,.login-submit,.login-panel { animation:none !important; }
-          .gold-button,.crest-glow,.mode-button { transition:none !important; }
+          .welcome-wave,.login-submit,.login-panel,.crest-glow,.gold-title,.gold-rule::after,.gold-button::before { animation:none !important; }
+          .gold-button,.crest-glow,.mode-pill,.mode-tab,.input-shell { transition:none !important; }
         }
       `}</style>
 
@@ -128,15 +224,17 @@ export default function Login() {
             </p>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-3">
+          {/* Sliding Segmented Control: Member Login | Admin Login */}
+          <div className="mode-track mt-6" role="tablist" aria-label="Login mode">
+            <div className={`mode-pill ${mode === 'admin' ? 'admin' : ''}`} aria-hidden="true" />
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === 'member'}
               onClick={() => switchMode('member')}
-              className={`mode-button flex min-w-0 items-center justify-center gap-2 rounded-xl px-2.5 py-3 text-sm font-bold active:scale-[.97] sm:px-3 ${
-                mode === 'member' ? 'active' : ''
-              }`}
+              className={`mode-tab min-w-0 ${mode === 'member' ? 'active' : ''}`}
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#241b0b]/15">
+              <span className="tab-icon tab-icon-user flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-current/15">
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
                   <path d="M12 12c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm0 2c-3.33 0-10 1.67-10 5v3h20v-3c0-3.33-6.67-5-10-5z" />
                 </svg>
@@ -146,12 +244,12 @@ export default function Login() {
 
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === 'admin'}
               onClick={() => switchMode('admin')}
-              className={`mode-button flex min-w-0 items-center justify-center gap-2 rounded-xl px-2.5 py-3 text-sm font-bold active:scale-[.97] sm:px-3 ${
-                mode === 'admin' ? 'active' : ''
-              }`}
+              className={`mode-tab min-w-0 ${mode === 'admin' ? 'active' : ''}`}
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white/10">
+              <span className="tab-icon tab-icon-gear flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-current/10">
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
                   <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
                 </svg>
@@ -160,49 +258,82 @@ export default function Login() {
             </button>
           </div>
 
+          {/* Interactive Input Fields */}
           <div key={mode} className="anim-fade-up mt-5 space-y-4">
-            <div>
-              <label className="mb-2 block text-sm font-semibold tracking-wide text-[#f1dfbd]">
-                {mode === 'member' ? 'Member Service No.' : 'Admin / Staff ID'}
-              </label>
-              <input
-                type="text"
-                placeholder={mode === 'member' ? 'Enter Service No. (e.g. IC-51234)' : 'Enter Admin / Staff ID (e.g. ADMIN)'}
-                value={sn}
-                onChange={(e) => {
-                  setSn(e.target.value);
-                  if (err) setErr('');
-                }}
-                autoFocus
-                autoCapitalize="characters"
-                required
-                className="gold-input h-12 w-full rounded-xl px-4 text-sm font-medium outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-semibold tracking-wide text-[#f1dfbd]">
-                {mode === 'member' ? 'Member PIN' : 'Admin PIN'}
+            <div className={`input-shell ${focusedField === 'sn' ? 'focused' : ''}`}>
+              <label className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
+                <span>{mode === 'member' ? 'Member Service No.' : 'Admin / Staff ID'}</span>
+                {sn.trim().length > 0 && (
+                  <span className="field-check text-[11px] font-bold text-[#ffd77b]">✓</span>
+                )}
               </label>
               <div className="relative flex items-center">
+                <span
+                  className={`pointer-events-none absolute left-3.5 transition-colors duration-200 ${
+                    focusedField === 'sn' ? 'text-[#ffc65c]' : 'text-[#e7c98f]/60'
+                  }`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  placeholder={mode === 'member' ? 'Enter Service No. (e.g. IC-51234)' : 'Enter Admin / Staff ID (e.g. ADMIN)'}
+                  value={sn}
+                  onFocus={() => setFocusedField('sn')}
+                  onBlur={() => setFocusedField((f) => (f === 'sn' ? null : f))}
+                  onChange={(e) => {
+                    setSn(e.target.value);
+                    if (err) setErr('');
+                  }}
+                  autoFocus
+                  autoCapitalize="characters"
+                  required
+                  className="gold-input h-12 w-full rounded-xl pl-10 pr-4 text-sm font-medium outline-none"
+                />
+              </div>
+            </div>
+
+            <div className={`input-shell ${focusedField === 'pin' ? 'focused' : ''}`}>
+              <label className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
+                <span>{mode === 'member' ? 'Member PIN' : 'Admin PIN'}</span>
+                {pin.trim().length > 0 && (
+                  <span className="field-check text-[11px] font-bold text-[#ffd77b]">✓</span>
+                )}
+              </label>
+              <div className="relative flex items-center">
+                <span
+                  className={`pointer-events-none absolute left-3.5 transition-colors duration-200 ${
+                    focusedField === 'pin' ? 'text-[#ffc65c]' : 'text-[#e7c98f]/60'
+                  }`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </span>
                 <input
                   type={showPin ? 'text' : 'password'}
                   placeholder="Enter your PIN"
                   value={pin}
+                  onFocus={() => setFocusedField('pin')}
+                  onBlur={() => setFocusedField((f) => (f === 'pin' ? null : f))}
                   onChange={(e) => {
                     setPin(e.target.value);
                     if (err) setErr('');
                   }}
                   autoCapitalize="characters"
                   required
-                  className="gold-input h-12 w-full rounded-xl pl-4 pr-12 text-sm font-medium outline-none"
+                  className="gold-input h-12 w-full rounded-xl pl-10 pr-12 text-sm font-medium outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPin((s) => !s)}
                   tabIndex={-1}
                   aria-label={showPin ? 'Hide PIN' : 'Show PIN'}
-                  className="absolute right-2 flex h-9 w-9 items-center justify-center rounded-full text-[#e7c98f] transition-colors hover:bg-[#ffc65c]/10 hover:text-[#fff1c9]"
+                  className="absolute right-2 flex h-9 w-9 items-center justify-center rounded-full text-[#e7c98f] transition-all duration-200 hover:scale-110 hover:bg-[#ffc65c]/15 hover:text-[#fff1c9] active:scale-90"
                 >
                   {showPin ? (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
@@ -221,15 +352,16 @@ export default function Login() {
           </div>
 
           {err && (
-            <div className="mt-4 rounded-xl border border-red-400/40 bg-red-950/65 px-3 py-2.5 text-center text-xs font-medium text-red-200">
+            <div className="field-check mt-4 rounded-xl border border-red-400/40 bg-red-950/65 px-3 py-2.5 text-center text-xs font-medium text-red-200">
               {err}
             </div>
           )}
 
+          {/* Shimmer Animated Login Button */}
           <button
             type="submit"
             disabled={busy}
-            className="gold-button login-submit mt-6 flex h-12 w-full items-center justify-center rounded-xl text-base font-extrabold tracking-wide disabled:cursor-not-allowed disabled:opacity-60"
+            className="gold-button login-submit mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-base font-extrabold tracking-wide disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy ? (
               <span className="inline-flex items-center gap-2">
@@ -237,7 +369,13 @@ export default function Login() {
                 Logging in…
               </span>
             ) : (
-              'Login'
+              <>
+                <span>Login</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="btn-arrow h-4 w-4">
+                  <path d="M5 12h14" />
+                  <path d="m12 5 7 7-7 7" />
+                </svg>
+              </>
             )}
           </button>
 
