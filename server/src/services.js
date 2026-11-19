@@ -222,18 +222,26 @@ export function createOrder(body, user) {
   return { order, duplicate: false };
 }
 
+function aggregateByProduct(items) {
+  const byProd = new Map();
+  for (const i of items) {
+    byProd.set(i.product_id, (byProd.get(i.product_id) || 0) + Number(i.base_qty));
+  }
+  return [...byProd.entries()];
+}
+
 function deduct(order, userId) {
   if (order.stock_deducted) return; // idempotent guard
-  for (const i of order.items) {
-    moveStock({ productId: i.product_id, type: 'sale', qty: -i.base_qty, unitCost: null, orderId: order.id, userId, note: `Order ${order.order_no}` });
+  for (const [productId, totalBase] of aggregateByProduct(order.items)) {
+    moveStock({ productId, type: 'sale', qty: -totalBase, unitCost: null, orderId: order.id, userId, note: `Order ${order.order_no}` });
   }
   q.run('UPDATE orders SET stock_deducted=1 WHERE id=?', order.id);
 }
 
 function reverse(order, userId) {
   if (!order.stock_deducted) return;
-  for (const i of order.items) {
-    moveStock({ productId: i.product_id, type: 'sale_reversal', qty: i.base_qty, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
+  for (const [productId, totalBase] of aggregateByProduct(order.items)) {
+    moveStock({ productId, type: 'sale_reversal', qty: totalBase, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
   }
   q.run('UPDATE orders SET stock_deducted=0 WHERE id=?', order.id);
 }

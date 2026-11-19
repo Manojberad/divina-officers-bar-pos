@@ -134,7 +134,10 @@ assert.equal(qrOrder.data.table_id, tables[0].id);
 console.log('5b. Peg policy (Small 30ml & Large 60ml only; full bottle only for Bartender/Admin)…');
 assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 90, qty: 1 }] } })).status, 400, '90ml peg rejected');
 assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 403, 'Member blocked from issuing full bottle');
-assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }, { product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 1 }] } })).status, 201, 'Member allowed Small(30ml) & Large(60ml)');
+const multiServe = await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }, { product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 1 }] } });
+assert.equal(multiServe.status, 201, 'Member allowed Small(30ml) & Large(60ml)');
+// Serving an order containing BOTH Small(30ml) and Large(60ml) of the SAME product must aggregate stock cleanly without UNIQUE constraint error
+assert.equal((await req(`/api/orders/${multiServe.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } })).status, 200, 'Serve succeeds for same product in multiple peg sizes');
 assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 201, 'Bartender allowed to issue full bottle');
 
 console.log('5c. Guest registration, bartender approval, admin notification & Cash/UPI checkout…');
