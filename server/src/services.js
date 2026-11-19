@@ -165,7 +165,7 @@ export function createOrder(body, user) {
     if (!body.scheduled_at || isNaN(Date.parse(body.scheduled_at))) throw new HttpError(400, 'Pre-booked orders need a valid date/time');
     if (['customer', 'guest'].includes(user?.role)) throw new HttpError(403, 'Only members can pre-book orders');
   }
-  const status = body.status === 'draft' ? 'draft' : 'placed';
+  const status = body.status === 'draft' || type === 'prebooked' ? 'draft' : 'placed';
 
   const items = body.items.map((it) => {
     const p = getProduct(Number(it.product_id));
@@ -334,4 +334,44 @@ export function expireApprovals() {
   const cutoff = new Date(Date.now() - hours * 3600e3).toISOString();
   const r = q.run("UPDATE orders SET approval_status='expired' WHERE status='closed' AND approval_status='pending' AND closed_at < ?", cutoff);
   return Number(r.changes);
+}
+
+/** Notify bartender on delivery day and 1 hour before scheduled time for Pre-Orders in Draft. */
+export function checkPreorderReminders() {
+  const rows = q.all(
+    `SELECT o.id, o.order_no, o.scheduled_at, u.name customer_name, u.rank customer_rank
+     FROM orders o LEFT JOIN users u ON u.id=o.user_id
+     WHERE o.type='prebooked' AND o.status IN ('draft','placed','accepted') AND o.scheduled_at IS NOT NULL`,
+  );
+  const nowMs = Date.now();
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  let sent = 0;
+  for (const o of rows) {
+    const dueMs = Date.parse(o.scheduled_at);
+    if (isNaN(dueMs)) continue;
+    const dueDate = new Date(dueMs);
+    const dueStr = dueDate.toLocaleDateString('en-CA');
+    const timeLabel = dueDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const who = `${o.customer_rank ? `${o.customer_rank} ` : ''}${o.customer_name || 'Member'}`;
+
+    // 1. Delivery-day notification
+    if (dueStr === todayStr) {
+      const dayTag = `Pre-Order #${o.order_no} is due TODAY`;
+      if (!q.get("SELECT id FROM notifications WHERE target_role='bartender' AND message LIKE ?", `${dayTag}%`)) {
+        notify('bartender', null, `${dayTag} at ${timeLabel} for ${who}`, '/orders');
+        sent++;
+      }
+    }
+    // 2. 1-hour-before notification (move to Preparing)
+    const minsLeft = (dueMs - nowMs) / 60000;
+    if (minsLeft <= 60 && minsLeft >= -180) {
+      const hrTag = `⏰ Pre-Order #${o.order_no} due soon`;
+      if (!q.get("SELECT id FROM notifications WHERE target_role='bartender' AND message LIKE ?", `${hrTag}%`)) {
+        notify('bartender', null, `${hrTag} (${timeLabel} · ${who}) — move to Preparing now!`, '/orders');
+        sent++;
+      }
+    }
+  }
+  if (sent > 0) broadcast('notification', {});
+  return sent;
 }

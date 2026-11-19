@@ -5,7 +5,11 @@ import { Badge, Button, Card, DateRange, Empty, Field, Input, Modal, Textarea, c
 
 const ACTIVE = ['draft', 'placed', 'accepted', 'preparing', 'served'];
 const NEXT: Record<string, [string, string]> = {
-  draft: ['placed', 'Place'], placed: ['accepted', 'Accept'], accepted: ['preparing', 'Prepare'], preparing: ['served', 'Serve'], served: ['closed', 'Close'],
+  draft: ['preparing', 'Move to Preparing'],
+  placed: ['preparing', 'Accept'],
+  accepted: ['preparing', 'Move to Preparing'],
+  preparing: ['served', 'Serve'],
+  served: ['closed', 'Close'],
 };
 
 export const itemLabel = (i: any) =>
@@ -151,8 +155,8 @@ export default function OrdersBoard() {
   }, []);
   useEffect(() => { if (tab === 'history') loadHist(); }, [tab, range, hstatus, search]);
 
-  const advance = async (o: any) => {
-    const nextStatus = NEXT[o.status][0];
+  const advance = async (o: any, forceStatus?: string, note?: string) => {
+    const nextStatus = forceStatus || NEXT[o.status][0];
     // Guest order closing requires recording payment mode (Cash / UPI)
     if (nextStatus === 'closed' && o.customer_role === 'guest') {
       setCheckoutOrder(o);
@@ -160,7 +164,11 @@ export default function OrdersBoard() {
       setCheckoutPayRef('');
       return;
     }
-    try { await api(`/orders/${o.id}/status`, { method: 'POST', body: { status: nextStatus } }); load(); } catch (e: any) { toast(e.message, 'error'); }
+    try {
+      await api(`/orders/${o.id}/status`, { method: 'POST', body: { status: nextStatus, ...(note ? { note } : {}) } });
+      if (nextStatus === 'preparing' && o.status === 'placed') toast(`Order #${o.order_no.split('-')[1]} accepted → moved to Preparing`);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
   };
 
   const confirmGuestCheckout = async (e: React.FormEvent) => {
@@ -218,38 +226,130 @@ export default function OrdersBoard() {
       </div>
 
       {tab === 'live' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-5">
-          {ACTIVE.map((s) => {
-            const list = orders.filter((o) => o.status === s).sort((a, b) => (a.type === 'prebooked' ? 1 : 0) - (b.type === 'prebooked' ? 1 : 0) || a.id - b.id);
-            return (
-              <div key={s} className="flex min-h-0 flex-col rounded-[20px] border border-transparent bg-white/60 p-3 dark:border-[#2A3346] dark:bg-[#1C2230]/80">
-                <div className="mb-2.5 flex items-center justify-between px-1"><Badge s={s} /><span className="text-xs font-bold text-[#94A3B8]">{list.length}</span></div>
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-4">
+          {(() => {
+            const nowMs = Date.now();
+            const todayStr = new Date().toLocaleDateString('en-CA');
+            const isDraftPreorder = (o: any) => o.status === 'draft' || (o.type === 'prebooked' && ['draft', 'placed', 'accepted'].includes(o.status));
+            const cols = [
+              {
+                key: 'draft',
+                badge: 'draft',
+                title: 'Draft · Pre-Orders',
+                list: orders.filter(isDraftPreorder).sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at)),
+              },
+              {
+                key: 'placed',
+                badge: 'placed',
+                title: 'Placed & Accepted',
+                list: orders.filter((o) => !isDraftPreorder(o) && ['placed', 'accepted'].includes(o.status)).sort((a, b) => a.id - b.id),
+              },
+              {
+                key: 'preparing',
+                badge: 'preparing',
+                title: 'Preparing',
+                list: orders.filter((o) => o.status === 'preparing').sort((a, b) => a.id - b.id),
+              },
+              {
+                key: 'served',
+                badge: 'served',
+                title: 'Served',
+                list: orders.filter((o) => o.status === 'served').sort((a, b) => a.id - b.id),
+              },
+            ];
+            return cols.map((col) => (
+              <div key={col.key} className="flex min-h-0 flex-col rounded-[20px] border border-transparent bg-white/60 p-3 dark:border-[#2A3346] dark:bg-[#1C2230]/80">
+                <div className="mb-2.5 flex items-center justify-between px-1">
+                  <Badge s={col.badge}>{col.title}</Badge>
+                  <span className="text-xs font-bold text-[#94A3B8]">{col.list.length}</span>
+                </div>
                 <div className="space-y-2.5 overflow-auto">
-                  {list.map((o) => (
-                    <div key={o.id} className={cx('horizon-shadow rounded-2xl bg-white p-3.5 dark:bg-[#252D3D]', o.type === 'prebooked' && 'ring-2 ring-[#422AFB] dark:ring-[#818CF8]')}>
-                      <button className="w-full text-left" onClick={() => setSel(o.id)}>
-                        <div className="flex justify-between text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">
-                          <span>#{o.order_no.split('-')[1]} {o.table_name && `· ${o.table_name}`}</span>
-                          <span className="text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</span>
-                        </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-medium text-[#94A3B8]">
-                          <span>{o.customer_rank ? `${o.customer_rank} ` : ''}{o.customer_name || 'Walk-in'}</span>
-                          {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}
-                          <span>· {fmtDate(o.created_at)} {o.source === 'qr' && '· QR'}</span>
-                        </div>
-                        {o.type === 'prebooked' && <div className="text-xs font-bold text-[#422AFB] dark:text-[#818CF8]">⏰ {fmtDate(o.scheduled_at)}</div>}
-                        <ul className="mt-1.5 text-sm font-medium">{o.items.map((i: any) => <li key={i.id}>{itemLabel(i)}</li>)}</ul>
-                        {o.notes && <div className="mt-1.5 rounded-xl bg-[#FBBF24]/15 px-2.5 py-1 text-xs font-semibold text-[#B86E00] dark:text-[#FCD34D]">📝 {o.notes}</div>}
-                      </button>
-                      <Button size="sm" className="mt-2.5 w-full" onClick={() => advance(o)}>
-                        {s === 'served' && o.customer_role === 'guest' ? 'Checkout (Cash / UPI) →' : `${NEXT[s][1]} →`}
-                      </Button>
-                    </div>
-                  ))}
+                  {col.list.length === 0 && <div className="py-8 text-center text-xs text-[#94A3B8]">No orders</div>}
+                  {col.list.map((o) => {
+                    const dueMs = o.scheduled_at ? Date.parse(o.scheduled_at) : NaN;
+                    const minsToDue = !isNaN(dueMs) ? Math.round((dueMs - nowMs) / 60000) : null;
+                    const isDueToday = !isNaN(dueMs) && new Date(dueMs).toLocaleDateString('en-CA') === todayStr;
+                    const isDueSoon = minsToDue != null && minsToDue <= 60;
+
+                    return (
+                      <div
+                        key={o.id}
+                        className={cx(
+                          'horizon-shadow rounded-2xl bg-white p-3.5 dark:bg-[#252D3D]',
+                          col.key === 'draft' && isDueSoon && 'ring-2 ring-[#FBBF24]',
+                          col.key === 'draft' && !isDueSoon && o.type === 'prebooked' && 'ring-1 ring-[#422AFB]/50 dark:ring-[#818CF8]/50',
+                        )}
+                      >
+                        <button className="w-full text-left" onClick={() => setSel(o.id)}>
+                          <div className="flex justify-between text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">
+                            <span>#{o.order_no.split('-')[1]} {o.table_name && `· ${o.table_name}`}</span>
+                            <span className="text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</span>
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-medium text-[#94A3B8]">
+                            <span>{o.customer_rank ? `${o.customer_rank} ` : ''}{o.customer_name || 'Walk-in'}</span>
+                            {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}
+                            <span>· {fmtDate(o.created_at)} {o.source === 'qr' && '· QR'}</span>
+                          </div>
+                          {o.type === 'prebooked' && o.scheduled_at && (
+                            <div className={cx('mt-1.5 rounded-xl px-2.5 py-1 text-xs font-bold', isDueSoon ? 'bg-[#EE5D50]/15 text-[#EE5D50]' : isDueToday ? 'bg-[#FBBF24]/20 text-[#B86E00] dark:text-[#FCD34D]' : 'bg-[#422AFB]/10 text-[#422AFB] dark:text-[#818CF8]')}>
+                              {isDueSoon
+                                ? minsToDue! <= 0
+                                  ? `⏰ Due NOW (${fmtDate(o.scheduled_at)}) — Move to Preparing!`
+                                  : `⏰ Due in ${minsToDue} min (${fmtDate(o.scheduled_at)}) — Prepare now!`
+                                : isDueToday
+                                  ? `📅 Due Today · ${fmtDate(o.scheduled_at)}`
+                                  : `🗓 Pre-Order · ${fmtDate(o.scheduled_at)}`}
+                            </div>
+                          )}
+                          <ul className="mt-1.5 text-sm font-medium">{o.items.map((i: any) => <li key={i.id}>{itemLabel(i)}</li>)}</ul>
+                          {o.notes && <div className="mt-1.5 rounded-xl bg-[#FBBF24]/15 px-2.5 py-1 text-xs font-semibold text-[#B86E00] dark:text-[#FCD34D]">📝 {o.notes}</div>}
+                        </button>
+
+                        {/* Column-specific action buttons */}
+                        {col.key === 'draft' && (
+                          <Button
+                            size="sm"
+                            variant={isDueSoon ? 'primary' : 'subtle'}
+                            className={cx('mt-2.5 w-full', isDueSoon && 'animate-pulse shadow-[0_0_16px_rgba(66,42,251,0.55)]')}
+                            onClick={() => advance(o, 'preparing', 'Pre-Order moved to Preparing')}
+                          >
+                            Move to Preparing →
+                          </Button>
+                        )}
+
+                        {col.key === 'placed' && (
+                          <div className="mt-2.5 grid grid-cols-2 gap-2">
+                            <span className="inline-flex min-h-9 items-center justify-center gap-1 rounded-xl bg-[#01B574] px-3 py-1.5 text-xs font-extrabold text-white shadow-xs">
+                              ✓ Placed
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => advance(o, 'preparing', 'Accepted & moved to Preparing')}
+                              className="inline-flex min-h-9 animate-pulse items-center justify-center gap-1 rounded-xl bg-[#422AFB] px-3 py-1.5 text-xs font-extrabold text-white shadow-[0_0_18px_rgba(66,42,251,0.75)] ring-2 ring-[#818CF8]/70 transition hover:brightness-110 active:scale-95 dark:bg-[#6366F1] dark:shadow-[0_0_18px_rgba(99,102,241,0.8)]"
+                            >
+                              Accept →
+                            </button>
+                          </div>
+                        )}
+
+                        {col.key === 'preparing' && (
+                          <Button size="sm" variant="success" className="mt-2.5 w-full" onClick={() => advance(o, 'served', 'Served to customer')}>
+                            🍽 Serve →
+                          </Button>
+                        )}
+
+                        {col.key === 'served' && (
+                          <Button size="sm" className="mt-2.5 w-full" onClick={() => advance(o, 'closed')}>
+                            {o.customer_role === 'guest' ? 'Checkout (Cash / UPI) →' : 'Close →'}
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            );
-          })}
+            ));
+          })()}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">

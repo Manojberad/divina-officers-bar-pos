@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, q, tx, ALL_TABLES, BACKUP_DIR, UPLOAD_DIR, getSettings, now } from './db.js';
-import { expireApprovals } from './services.js';
+import { expireApprovals, checkPreorderReminders } from './services.js';
 
 export function createBackupObject({ includeImages = true } = {}) {
   const data = {};
@@ -60,6 +60,8 @@ export function startJobs() {
     try {
       const n = expireApprovals();
       if (n) console.log(`[jobs] ${n} order approval(s) expired`);
+      const pr = checkPreorderReminders();
+      if (pr) console.log(`[jobs] ${pr} pre-order reminder(s) sent to bartender`);
       const hours = Number(getSettings().auto_backup_hours || 6);
       if (hours > 0 && Date.now() - lastBackup > hours * 3600e3) {
         lastBackup = Date.now();
