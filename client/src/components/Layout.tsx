@@ -1,0 +1,244 @@
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useApp, type Role } from '../lib/app';
+import { api, conn, onConn, subscribe } from '../lib/api';
+import { cx, fmtDate } from './ui';
+
+const ICONS: Record<string, ReactNode> = {
+  '/dashboard': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" /></svg>,
+  '/pos': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z" /></svg>,
+  '/orders': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
+  '/order': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M21 5V3H3v2l8 9v5H6v2h12v-2h-5v-5l8-9zM7.43 7 5.66 5h12.69l-1.78 2H7.43z" /></svg>,
+  '/my-orders': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" /></svg>,
+  '/inventory': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7c.57-.35 1-.97 1-1.69V4c0-1.1-1-2-2-2zm-5 12H9v-2h6v2zm5-7H4V4h16v3z" /></svg>,
+  '/products': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2 4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z" /></svg>,
+  '/users': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" /></svg>,
+  '/tables': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM13 13h2v2h-2v-2zm2 2h2v2h-2v-2zm2-2h2v2h-2v-2zm2 2h2v2h-2v-2zm-2 2h2v2h-2v-2zm0 2h2v2h-2v-2zm-4-2h2v2h-2v-2zm0 2h2v2h-2v-2zm6 0h2v2h-2v-2z" /></svg>,
+  '/reports': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" /></svg>,
+  '/settings': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
+};
+
+const NAV: { to: string; label: string; roles: Role[] }[] = [
+  { to: '/dashboard', label: 'Main Dashboard', roles: ['admin'] },
+  { to: '/pos', label: 'POS Terminal', roles: ['admin', 'bartender'] },
+  { to: '/orders', label: 'Orders Board', roles: ['admin', 'bartender'] },
+  { to: '/order', label: 'Bar Menu', roles: ['member', 'customer'] },
+  { to: '/my-orders', label: 'My Orders', roles: ['member', 'customer'] },
+  { to: '/inventory', label: 'Inventory & Stock', roles: ['admin', 'bartender'] },
+  { to: '/products', label: 'Products & Pricing', roles: ['admin'] },
+  { to: '/users', label: 'Officers & Users', roles: ['admin'] },
+  { to: '/tables', label: 'Tables & QR Codes', roles: ['admin'] },
+  { to: '/reports', label: 'Reports & Exports', roles: ['admin'] },
+  { to: '/settings', label: 'Admin Settings', roles: ['admin'] },
+];
+
+export default function Layout() {
+  const { user, logout, settings, dark, toggleDark, reloadSettings } = useApp();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [c, setC] = useState({ ...conn });
+  const [notes, setNotes] = useState<any[]>([]);
+  const [showNotes, setShowNotes] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => onConn(() => setC({ ...conn })), []);
+  const loadNotes = () => api('/admin/notifications', { cache: false }).then(setNotes).catch(() => {});
+  useEffect(() => {
+    loadNotes();
+    return subscribe((ev) => { if (ev === 'notification') loadNotes(); if (ev === 'settings') reloadSettings(); });
+  }, []);
+  useEffect(() => { setDrawerOpen(false); }, [loc.pathname]);
+
+  const unread = notes.filter((n) => !n.read).length;
+  const items = NAV.filter((n) => user && n.roles.includes(user.role));
+  const currentTitle = items.find((i) => loc.pathname.startsWith(i.to))?.label || (loc.pathname === '/account' ? 'Profile & PIN' : settings.bar_name);
+  const initials = (user?.name || 'U').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+
+  const SidebarContent = (
+    <div className="flex h-full flex-col bg-white dark:bg-[#1C2230]">
+      {/* Brand Header */}
+      <div className="flex items-center gap-3 px-6 pt-7 pb-6">
+        <img src={settings.logo || '/Login_logo.png'} className="h-11 w-11 shrink-0 rounded-xl object-contain" alt="" />
+        <div className="min-w-0">
+          <div className="font-ubuntu truncate text-base font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3]">
+            {settings.bar_name || "DIVINA OFFICERS's BAR"}
+          </div>
+          <div className="text-[11px] font-semibold uppercase tracking-widest text-[#94A3B8]">Horizon POS</div>
+        </div>
+      </div>
+      <div className="mx-6 mb-4 h-px bg-[#E9EDF7] dark:bg-[#2A3346]" />
+
+      {/* Nav Links */}
+      <div className="flex-1 space-y-1 overflow-y-auto pl-6 pr-0">
+        {items.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            className={({ isActive }) =>
+              cx(
+                'group relative flex items-center gap-3.5 py-3 pr-4 text-sm transition-colors',
+                isActive ? 'font-bold text-[#1B2559] dark:text-[#E6EDF3]' : 'font-medium text-[#707EAE] hover:text-[#1B2559] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]',
+              )
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <span className={cx('transition-colors', isActive ? 'text-[#422AFB] dark:text-[#818CF8]' : 'text-[#94A3B8] group-hover:text-[#422AFB] dark:group-hover:text-[#818CF8]')}>
+                  {ICONS[n.to]}
+                </span>
+                <span className="truncate">{n.label}</span>
+                {isActive && <span className="absolute right-0 top-1/2 h-9 w-1 -translate-y-1/2 rounded-l-full bg-[#422AFB] dark:bg-[#818CF8]" />}
+              </>
+            )}
+          </NavLink>
+        ))}
+      </div>
+
+      {/* Officer Profile Card at Bottom */}
+      <div className="p-5">
+        <div className="horizon-gradient relative overflow-hidden rounded-[20px] p-4 text-white shadow-lg">
+          <div className="relative z-10 flex items-center gap-3">
+            <button onClick={() => nav('/account')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20 text-sm font-extrabold backdrop-blur-xs">
+              {initials}
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-bold">{user?.rank ? `${user.rank} ` : ''}{user?.name}</div>
+              <div className="truncate text-xs text-white/80 capitalize">{user?.role} · {user?.service_no}</div>
+            </div>
+          </div>
+          <div className="relative z-10 mt-3 flex gap-2">
+            <button onClick={() => nav('/account')} className="flex-1 rounded-xl bg-white/20 py-1.5 text-xs font-bold backdrop-blur-xs transition hover:bg-white/30">
+              Account
+            </button>
+            <button onClick={() => { logout(); nav('/login'); }} className="flex-1 rounded-xl bg-black/25 py-1.5 text-xs font-bold transition hover:bg-black/40">
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full bg-[#F4F7FE] text-[#1B2559] dark:bg-[#131722] dark:text-[#E6EDF3]">
+      {/* Desktop Fixed Sidebar */}
+      <aside className="no-print hidden w-[275px] shrink-0 border-r border-[#E9EDF7] dark:border-[#262E40] xl:block">
+        {SidebarContent}
+      </aside>
+
+      {/* Mobile / Tablet Slide-Over Drawer */}
+      {drawerOpen && (
+        <div className="no-print fixed inset-0 z-50 flex xl:hidden">
+          <div className="fixed inset-0 bg-black/55 backdrop-blur-xs" onClick={() => setDrawerOpen(false)} />
+          <div className="relative z-10 h-full w-[280px] max-w-[82vw] shadow-2xl">
+            {SidebarContent}
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Glassmorphic Floating Navbar */}
+        <header className="no-print sticky top-0 z-30 mx-3 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-[#131722]/80 sm:mx-5">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">
+              Pages <span className="mx-1">/</span> <span className="font-semibold text-[#1B2559] dark:text-[#E6EDF3]">{currentTitle}</span>
+            </div>
+            <h1 className="truncate text-xl font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] sm:text-2xl">
+              {currentTitle}
+            </h1>
+          </div>
+
+          {/* Right Pill Toolbar */}
+          <div className="horizon-pill-shadow flex items-center gap-1.5 rounded-full border border-transparent bg-white px-3 py-2 dark:border-[#2A3346] dark:bg-[#1C2230] sm:gap-2.5">
+            {/* Mobile / Tablet Menu Toggle */}
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[#94A3B8] hover:bg-[#F4F7FE] hover:text-[#1B2559] dark:hover:bg-[#252D3D] dark:hover:text-[#E6EDF3] xl:hidden"
+              aria-label="Open menu"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="h-5 w-5"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+
+            {/* Connection Status Pill */}
+            <span className={cx('flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold', c.online ? 'bg-[#10B981]/15 text-[#10B981]' : 'bg-[#F87171]/15 text-[#F87171]')}>
+              <span className={cx('h-2 w-2 rounded-full', c.online ? 'bg-[#10B981]' : 'bg-[#F87171]')} />
+              <span className="hidden sm:inline">{c.online ? 'Connected' : 'Offline'}</span>
+              {c.queued ? ` (${c.queued})` : ''}
+            </span>
+
+            {/* Notifications Bell */}
+            <div className="relative">
+              <button
+                className="relative flex h-9 w-9 items-center justify-center rounded-full text-[#94A3B8] transition hover:bg-[#F4F7FE] hover:text-[#1B2559] dark:hover:bg-[#252D3D] dark:hover:text-[#E6EDF3]"
+                onClick={() => { setShowNotes(!showNotes); if (unread) api('/admin/notifications/read', { method: 'POST' }).then(loadNotes); }}
+                title="Notifications"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" /></svg>
+                {unread > 0 && <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F87171] px-1 text-[10px] font-bold text-white">{unread}</span>}
+              </button>
+              {showNotes && (
+                <div className="horizon-pill-shadow absolute right-0 z-40 mt-3 max-h-96 w-80 overflow-auto rounded-[20px] border border-[#E9EDF7] bg-white p-3 dark:border-[#2E384D] dark:bg-[#1C2230]">
+                  <div className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Notifications</div>
+                  {notes.length === 0 && <div className="p-4 text-center text-sm text-[#94A3B8]">No notifications</div>}
+                  {notes.map((n) => (
+                    <div key={n.id} className="rounded-xl p-2.5 text-sm hover:bg-[#F4F7FE] dark:hover:bg-[#252D3D]">
+                      <div className="font-medium text-[#1B2559] dark:text-[#E6EDF3]">{n.message}</div>
+                      <div className="mt-0.5 text-xs text-[#94A3B8]">{fmtDate(n.at)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Theme Toggle */}
+            <button
+              onClick={toggleDark}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[#94A3B8] transition hover:bg-[#F4F7FE] hover:text-[#1B2559] dark:hover:bg-[#252D3D] dark:hover:text-[#E6EDF3]"
+              title="Toggle Dark / Light Theme"
+            >
+              {dark ? (
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-[#FBBF24]"><path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z" /></svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-[#422AFB]"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z" /></svg>
+              )}
+            </button>
+
+            {/* User Avatar Pill */}
+            <button
+              onClick={() => nav('/account')}
+              className="horizon-gradient flex h-9 w-9 items-center justify-center rounded-full text-xs font-extrabold text-white shadow-sm"
+              title={`${user?.name} (${user?.role})`}
+            >
+              {initials}
+            </button>
+          </div>
+        </header>
+
+        {/* Main Scrollable Viewport */}
+        <main className="min-h-0 flex-1 overflow-auto px-2 pb-20 pt-2 sm:px-4 xl:pb-4">
+          <Outlet />
+        </main>
+
+        {/* Mobile / Tablet Bottom Quick Navigation Bar */}
+        <nav className="no-print fixed bottom-0 left-0 right-0 z-30 flex overflow-x-auto border-t border-[#E9EDF7] bg-white/95 px-2 py-1.5 backdrop-blur-lg dark:border-[#2A3346] dark:bg-[#1C2230]/95 xl:hidden">
+          {items.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              className={({ isActive }) =>
+                cx(
+                  'flex min-w-[74px] flex-1 flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[11px] font-bold transition',
+                  isActive ? 'text-[#422AFB] dark:text-[#818CF8]' : 'text-[#94A3B8]',
+                )
+              }
+            >
+              {ICONS[n.to]}
+              <span className="truncate">{n.label.split(' ')[0]}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}

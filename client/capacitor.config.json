@@ -1,0 +1,9 @@
+{
+  "appId": "local.bartill.pos",
+  "appName": "BarTill POS",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http"
+  }
+}

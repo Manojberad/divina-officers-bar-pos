@@ -1,0 +1,12 @@
+node_modules/
+client/dist/
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+server/data/.secret
+server/data/backups/
+server/out.log
+server/err.log
+*.log
+.DS_Store
+Thumbs.db

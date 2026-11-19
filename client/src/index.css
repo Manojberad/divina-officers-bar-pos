@@ -1,0 +1,83 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --accent: #422afb;
+  --accent-light: #6366f1;
+  --horizon-bg: #f4f7fe;
+  --horizon-card: #ffffff;
+  --horizon-navy: #1b2559;
+  --horizon-muted: #707eae;
+}
+
+/* Soothing, low-glare Dusk Slate dark theme */
+.dark {
+  --accent: #6366f1;
+  --horizon-bg: #131722;
+  --horizon-card: #1c2230;
+  --horizon-navy: #e6edf3;
+  --horizon-muted: #94a3b8;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background-color: var(--horizon-bg);
+  color: var(--horizon-navy);
+  font-family: 'DM Sans', 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  @apply antialiased;
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.font-ubuntu { font-family: 'Ubuntu', sans-serif; }
+
+/* Soft elevation shadow */
+.horizon-shadow {
+  box-shadow: 14px 17px 40px 4px rgba(112, 144, 176, 0.08);
+}
+.dark .horizon-shadow {
+  box-shadow: 0 8px 28px -4px rgba(0, 0, 0, 0.28);
+}
+
+.horizon-pill-shadow {
+  box-shadow: 14px 17px 40px 4px rgba(112, 144, 176, 0.18);
+}
+.dark .horizon-pill-shadow {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.horizon-gradient {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+}
+.dark .horizon-gradient {
+  background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes floatLogo {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes waveHand {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  15% { transform: rotate(16deg); }
+  30% { transform: rotate(-10deg); }
+  45% { transform: rotate(14deg); }
+}
+@keyframes shakeError {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-7px); }
+  40%, 80% { transform: translateX(7px); }
+}
+
+.anim-fade-up { animation: fadeInUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.anim-float { animation: floatLogo 4.5s ease-in-out infinite; }
+.anim-wave { display: inline-block; transform-origin: 70% 70%; animation: waveHand 2.6s ease-in-out infinite; }
+.anim-shake { animation: shakeError 0.42s ease-in-out; }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white !important; color: black !important; }
+}

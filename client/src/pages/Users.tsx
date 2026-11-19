@@ -1,0 +1,192 @@
+import { useEffect, useState } from 'react';
+import { api } from '../lib/api';
+import { useApp } from '../lib/app';
+import { Badge, Button, Card, Field, Input, Modal, Select } from '../components/ui';
+
+const BLANK = { name: '', service_no: '', rank: '', mobile: '', email: '', category: 'POSTED', role: 'member', pin: '', active: 1 };
+
+const CAT_LABEL: Record<string, string> = {
+  POSTED: 'Posted-In Officer',
+  TD: 'TD Officer',
+  STAFF: 'Mess Staff',
+};
+
+const CAT_BADGE: Record<string, string> = {
+  POSTED: 'accepted',
+  TD: 'preparing',
+  STAFF: 'placed',
+};
+
+export default function Users() {
+  const { toast } = useApp();
+  const [users, setUsers] = useState<any[]>([]);
+  const [ed, setEd] = useState<any>(null);
+  const [pinModal, setPinModal] = useState<any>(null);
+  const [newPin, setNewPin] = useState('');
+
+  const load = () => api('/users', { cache: false }).then(setUsers);
+  useEffect(() => { load(); }, []);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = {
+      ...ed,
+      category: ed.role === 'bartender' ? 'STAFF' : ed.category,
+    };
+    try {
+      await api(ed.id ? `/users/${ed.id}` : '/users', { method: ed.id ? 'PUT' : 'POST', body: payload });
+      toast('User saved');
+      setEd(null);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const importXlsx = async (file?: File) => {
+    if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await api('/users/import', { method: 'POST', body: fd });
+      toast(`Imported ${r.created} user(s)${r.skipped.length ? ` (${r.skipped.length} skipped)` : ''}`);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const resetPin = async () => {
+    try { const r = await api(`/users/${pinModal.id}/reset-pin`, { method: 'POST', body: { pin: newPin || undefined } }); toast(r.message); setPinModal(null); setNewPin(''); } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const onRoleChange = (role: string) => {
+    if (role === 'bartender') {
+      setEd({ ...ed, role, category: 'STAFF', rank: ed.rank || 'Mess Staff' });
+    } else if (ed.category === 'STAFF') {
+      setEd({ ...ed, role, category: 'POSTED' });
+    } else {
+      setEd({ ...ed, role });
+    }
+  };
+
+  const onCategoryChange = (category: string) => {
+    if (category === 'STAFF') {
+      setEd({ ...ed, category: 'STAFF', role: 'bartender', rank: ed.rank || 'Mess Staff' });
+    } else if (ed.role === 'bartender') {
+      setEd({ ...ed, category, role: category === 'TD' ? 'customer' : 'member' });
+    } else {
+      setEd({ ...ed, category });
+    }
+  };
+
+  return (
+    <div className="space-y-4 p-4">
+      <Card
+        title={`Registered Users (${users.length} / 50)`}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <label className="cursor-pointer rounded-2xl bg-[#F4F7FE] px-3.5 py-2.5 text-sm font-bold text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3]">
+              📥 Import Excel (Posted-In)
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => importXlsx(e.target.files?.[0])} />
+            </label>
+            <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'STAFF', role: 'bartender', rank: 'Mess Staff' })}>
+              + Add Mess Staff (Bartender)
+            </Button>
+            <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'TD', role: 'customer' })}>
+              + Register TD Officer
+            </Button>
+            <Button onClick={() => setEd({ ...BLANK })}>+ Add Posted-In Officer</Button>
+          </div>
+        }
+      >
+        <p className="mb-3 text-xs text-[#707EAE] dark:text-[#94A3B8]">
+          Posted-in officers get their Service Number as their initial PIN (stored with scrypt hashing). Bartenders are categorised as <b>Mess Staff</b>. Excel import columns: <code>Name, Service Number, Rank, Mobile, Email, Category, Role</code>.
+        </p>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
+              <tr><th className="p-2">Name</th><th>Service / Staff No</th><th>Rank / Designation</th><th>Category</th><th>Role</th><th>Mobile</th><th>Email</th><th>Status</th><th /></tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
+                  <td className="p-2 font-bold">{u.name}</td>
+                  <td>{u.service_no}</td>
+                  <td>{u.rank || '—'}</td>
+                  <td><Badge s={CAT_BADGE[u.category] || 'accepted'}>{CAT_LABEL[u.category] || u.category}</Badge></td>
+                  <td className="capitalize">{u.role}</td>
+                  <td>{u.mobile || '—'}</td>
+                  <td>{u.email || '—'}</td>
+                  <td>{u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}</td>
+                  <td className="space-x-1 text-right">
+                    <Button size="sm" variant="subtle" onClick={() => setEd(u)}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setPinModal(u); setNewPin(''); }}>PIN</Button>
+                    <Button size="sm" variant="ghost" onClick={async () => { if (confirm('Remove user?')) { await api(`/users/${u.id}`, { method: 'DELETE' }); load(); } }}>✕</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Modal
+        open={!!ed}
+        onClose={() => setEd(null)}
+        title={ed?.id ? 'Edit User' : ed?.category === 'STAFF' ? 'Add Mess Staff (Bartender)' : ed?.category === 'TD' ? 'Register TD Officer' : 'Add Posted-In Officer'}
+      >
+        {ed && (
+          <form onSubmit={save} className="grid grid-cols-2 gap-3">
+            <Field label="Full name"><Input value={ed.name} onChange={(e) => setEd({ ...ed, name: e.target.value })} required /></Field>
+            <Field label={ed.category === 'STAFF' ? 'Staff ID / Number (unique)' : 'Service number (unique)'}>
+              <Input value={ed.service_no} onChange={(e) => setEd({ ...ed, service_no: e.target.value })} required />
+            </Field>
+            <Field label={ed.category === 'STAFF' ? 'Designation' : 'Rank'}>
+              <Input value={ed.rank || ''} onChange={(e) => setEd({ ...ed, rank: e.target.value })} placeholder={ed.category === 'STAFF' ? 'Bartender / Mess Staff' : 'e.g. Maj, Lt Col'} />
+            </Field>
+            <Field label="Mobile"><Input value={ed.mobile || ''} onChange={(e) => setEd({ ...ed, mobile: e.target.value })} /></Field>
+            <Field label="Email"><Input type="email" value={ed.email || ''} onChange={(e) => setEd({ ...ed, email: e.target.value })} /></Field>
+            <Field label="Application role">
+              <Select value={ed.role} onChange={(e) => onRoleChange(e.target.value)}>
+                <option value="member">Bar Member</option>
+                <option value="customer">Customer / User</option>
+                <option value="bartender">Bartender</option>
+                <option value="admin">Admin</option>
+              </Select>
+            </Field>
+            <Field label="Category">
+              {ed.role === 'bartender' ? (
+                <Select value="STAFF" disabled>
+                  <option value="STAFF">Mess Staff</option>
+                </Select>
+              ) : (
+                <Select value={ed.category} onChange={(e) => onCategoryChange(e.target.value)}>
+                  <option value="POSTED">Posted-In Officer</option>
+                  <option value="TD">TD Officer</option>
+                  <option value="STAFF">Mess Staff</option>
+                </Select>
+              )}
+            </Field>
+            {!ed.id && (ed.category === 'TD' || ed.category === 'STAFF') && (
+              <Field label={`Initial PIN (blank = ${ed.category === 'STAFF' ? 'Staff ID' : 'Service No'})`}>
+                <Input value={ed.pin || ''} onChange={(e) => setEd({ ...ed, pin: e.target.value })} />
+              </Field>
+            )}
+            {ed.id && (
+              <label className="col-span-2 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={!!ed.active} onChange={(e) => setEd({ ...ed, active: e.target.checked ? 1 : 0 })} /> Active account
+              </label>
+            )}
+            <div className="col-span-2 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setEd(null)}>Cancel</Button>
+              <Button>Save</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal open={!!pinModal} onClose={() => setPinModal(null)} title={`Reset PIN – ${pinModal?.name}`}>
+        <Field label="New PIN (leave blank to reset to Service / Staff Number)">
+          <Input value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder={pinModal?.service_no} />
+        </Field>
+        <div className="mt-3 flex justify-end"><Button onClick={resetPin}>Reset PIN</Button></div>
+      </Modal>
+    </div>
+  );
+}

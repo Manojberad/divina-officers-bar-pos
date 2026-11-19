@@ -1,0 +1,187 @@
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../data');
+export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+for (const d of [DATA_DIR, UPLOAD_DIR, BACKUP_DIR]) fs.mkdirSync(d, { recursive: true });
+
+export const db = new DatabaseSync(process.env.DB_FILE || path.join(DATA_DIR, 'bar.db'));
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+
+let depth = 0;
+/** Run fn inside a transaction (nested calls join the outer transaction). */
+export function tx(fn) {
+  if (depth > 0) return fn();
+  depth++;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const r = fn();
+    db.exec('COMMIT');
+    return r;
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    depth--;
+  }
+}
+
+export const q = {
+  get: (sql, ...p) => db.prepare(sql).get(...p),
+  all: (sql, ...p) => db.prepare(sql).all(...p),
+  run: (sql, ...p) => db.prepare(sql).run(...p),
+};
+
+export const now = () => new Date().toISOString();
+
+const migrations = [
+  // v1 – base schema
+  `
+  CREATE TABLE users(
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, service_no TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    rank TEXT, mobile TEXT, email TEXT, category TEXT NOT NULL DEFAULT 'POSTED' CHECK(category IN ('POSTED','TD','STAFF')),
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin','member','bartender','customer')),
+    pin_hash TEXT NOT NULL, must_change_pin INTEGER NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+  CREATE TABLE categories(
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, low_threshold REAL, critical_threshold REAL, sort INTEGER DEFAULT 0);
+  CREATE TABLE products(
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, category_id INTEGER REFERENCES categories(id),
+    brand TEXT, description TEXT, image TEXT, size_ml REAL DEFAULT 0, unit TEXT DEFAULT 'bottle',
+    is_peg INTEGER NOT NULL DEFAULT 0, purchase_price REAL NOT NULL DEFAULT 0, selling_price REAL NOT NULL DEFAULT 0,
+    peg_price REAL DEFAULT 0, stock REAL NOT NULL DEFAULT 0, min_stock REAL, critical_stock REAL,
+    favourite INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+  CREATE TABLE tables(id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1);
+  CREATE TABLE orders(
+    id INTEGER PRIMARY KEY, order_no TEXT NOT NULL UNIQUE, client_uuid TEXT UNIQUE,
+    user_id INTEGER REFERENCES users(id), created_by INTEGER REFERENCES users(id), table_id INTEGER REFERENCES tables(id),
+    type TEXT NOT NULL DEFAULT 'ondemand' CHECK(type IN ('ondemand','prebooked')), scheduled_at TEXT,
+    status TEXT NOT NULL DEFAULT 'placed' CHECK(status IN ('draft','placed','accepted','preparing','served','closed','cancelled','disputed')),
+    source TEXT DEFAULT 'pos', notes TEXT, total REAL NOT NULL DEFAULT 0, stock_deducted INTEGER NOT NULL DEFAULT 0,
+    approval_status TEXT NOT NULL DEFAULT 'na' CHECK(approval_status IN ('na','pending','approved','disputed','expired')),
+    approval_at TEXT, dispute_note TEXT, resolution_note TEXT, closed_at TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  CREATE INDEX idx_orders_created ON orders(created_at);
+  CREATE INDEX idx_orders_status ON orders(status);
+  CREATE TABLE order_items(
+    id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id), name TEXT NOT NULL,
+    serve_type TEXT NOT NULL CHECK(serve_type IN ('bottle','peg','unit')), peg_ml REAL, qty REAL NOT NULL,
+    unit_price REAL NOT NULL, line_total REAL NOT NULL, base_qty REAL NOT NULL);
+  CREATE TABLE order_events(
+    id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    from_status TEXT, to_status TEXT, user_id INTEGER, note TEXT, at TEXT NOT NULL);
+  CREATE TABLE stock_movements(
+    id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id),
+    type TEXT NOT NULL CHECK(type IN ('opening','purchase','sale','sale_reversal','wastage','complimentary','adjustment','removal','reconcile')),
+    qty REAL NOT NULL, unit_cost REAL, supplier TEXT, invoice TEXT, order_id INTEGER, note TEXT, user_id INTEGER, at TEXT NOT NULL);
+  CREATE INDEX idx_mov_product ON stock_movements(product_id, at);
+  CREATE UNIQUE INDEX uq_sale_once ON stock_movements(order_id, product_id, type) WHERE type IN ('sale','sale_reversal');
+  CREATE TABLE reconciliations(
+    id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), system_qty REAL, physical_qty REAL,
+    diff REAL, note TEXT, user_id INTEGER, at TEXT NOT NULL);
+  CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE audit_logs(id INTEGER PRIMARY KEY, user_id INTEGER, action TEXT NOT NULL, entity TEXT, entity_id TEXT, details TEXT, at TEXT NOT NULL);
+  CREATE TABLE notifications(id INTEGER PRIMARY KEY, target_role TEXT, user_id INTEGER, message TEXT NOT NULL, link TEXT, read INTEGER DEFAULT 0, at TEXT NOT NULL);
+  `,
+  // v2 – consolidate categories into: Alcohol, Soft Drinks, Packaged Snacks, From the Kitchen
+  `
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort) VALUES
+    ('Alcohol', 3, 1, 1),
+    ('Soft Drinks', 24, 10, 2),
+    ('Packaged Snacks', 10, 4, 3),
+    ('From the Kitchen', 10, 4, 4);
+  UPDATE categories SET sort = 1 WHERE name = 'Alcohol';
+  UPDATE categories SET sort = 2 WHERE name = 'Soft Drinks';
+  UPDATE categories SET sort = 3 WHERE name = 'Packaged Snacks';
+  UPDATE categories SET sort = 4 WHERE name = 'From the Kitchen';
+  UPDATE products SET category_id = (SELECT id FROM categories WHERE name = 'Alcohol')
+    WHERE category_id IN (SELECT id FROM categories WHERE name IN ('Whisky','Rum','Vodka','Gin','Beer','Wine'));
+  UPDATE products SET category_id = (SELECT id FROM categories WHERE name = 'From the Kitchen')
+    WHERE category_id IN (SELECT id FROM categories WHERE name = 'Snacks') AND (brand = 'Kitchen' OR name IN ('Chicken Tikka','French Fries'));
+  UPDATE products SET category_id = (SELECT id FROM categories WHERE name = 'Packaged Snacks')
+    WHERE category_id IN (SELECT id FROM categories WHERE name = 'Snacks');
+  DELETE FROM categories WHERE name IN ('Whisky','Rum','Vodka','Gin','Beer','Wine','Snacks');
+  `,
+  // v3 – add 'STAFF' (Mess Staff) category to users and assign bartenders to STAFF
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE users_new(
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, service_no TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    rank TEXT, mobile TEXT, email TEXT, category TEXT NOT NULL DEFAULT 'POSTED' CHECK(category IN ('POSTED','TD','STAFF')),
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin','member','bartender','customer')),
+    pin_hash TEXT NOT NULL, must_change_pin INTEGER NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+  INSERT INTO users_new SELECT id, name, service_no, rank, mobile, email,
+    CASE WHEN role = 'bartender' THEN 'STAFF' ELSE category END,
+    role, pin_hash, must_change_pin, active, created_at FROM users;
+  DROP TABLE users;
+  ALTER TABLE users_new RENAME TO users;
+  PRAGMA foreign_keys = ON;
+  `,
+];
+
+export function migrate() {
+  db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, at TEXT)');
+  const cur = q.get('SELECT MAX(version) v FROM schema_migrations')?.v || 0;
+  migrations.forEach((sql, i) => {
+    const v = i + 1;
+    if (v <= cur) return;
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      tx(() => {
+        db.exec(sql);
+        q.run('INSERT INTO schema_migrations(version, at) VALUES(?,?)', v, now());
+      });
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+    console.log(`[db] migration v${v} applied`);
+  });
+}
+
+export const DEFAULT_SETTINGS = {
+  bar_name: "DIVINA OFFICERS's BAR",
+  bar_address: '',
+  bar_phone: '',
+  currency: '₹',
+  logo: '/Login_logo.png',
+  background: '/Login_bg.png',
+  theme: 'dark',
+  accent: '#f59e0b',
+  approval_hours: '24',
+  peg_sizes: '30,60,90',
+  deduct_on: 'served',
+  allow_negative_stock: '0',
+  report_footer: 'Generated by BarTill – offline bar management',
+  auto_backup_hours: '6',
+  backup_keep: '20',
+};
+
+export function getSettings() {
+  const rows = q.all('SELECT key, value FROM settings');
+  const s = { ...DEFAULT_SETTINGS };
+  for (const r of rows) s[r.key] = r.value;
+  return s;
+}
+
+export const ALL_TABLES = [
+  'users', 'categories', 'products', 'tables', 'orders', 'order_items', 'order_events',
+  'stock_movements', 'reconciliations', 'settings', 'audit_logs', 'notifications',
+];
+
+export function audit(userId, action, entity, entityId, details) {
+  q.run('INSERT INTO audit_logs(user_id, action, entity, entity_id, details, at) VALUES(?,?,?,?,?,?)',
+    userId ?? null, action, entity ?? null, entityId == null ? null : String(entityId),
+    details == null ? null : typeof details === 'string' ? details : JSON.stringify(details), now());
+}
+
+export function notify(targetRole, userId, message, link) {
+  q.run('INSERT INTO notifications(target_role, user_id, message, link, at) VALUES(?,?,?,?,?)',
+    targetRole ?? null, userId ?? null, message, link ?? null, now());
+}
