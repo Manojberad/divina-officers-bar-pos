@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useApp, type Role } from '../lib/app';
 import { api, conn, onConn, subscribe } from '../lib/api';
-import { cx, fmtDate } from './ui';
+import { Badge, Button, Input, Modal, cx, fmtDate } from './ui';
 
 const ICONS: Record<string, ReactNode> = {
   '/dashboard': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" /></svg>,
@@ -33,26 +33,59 @@ const NAV: { to: string; label: string; roles: Role[] }[] = [
 ];
 
 export default function Layout() {
-  const { user, logout, settings, dark, toggleDark, reloadSettings } = useApp();
+  const { user, logout, settings, dark, toggleDark, reloadSettings, toast } = useApp();
   const nav = useNavigate();
   const loc = useLocation();
+  const isStaff = !!user && ['admin', 'bartender'].includes(user.role);
+
   const [c, setC] = useState({ ...conn });
   const [notes, setNotes] = useState<any[]>([]);
   const [showNotes, setShowNotes] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [guestReqs, setGuestReqs] = useState<any[]>([]);
+  const [showGuestModal, setShowGuestModal] = useState(false);
+  const [guestLimits, setGuestLimits] = useState<Record<number, string>>({});
 
   useEffect(() => onConn(() => setC({ ...conn })), []);
   const loadNotes = () => api('/admin/notifications', { cache: false }).then(setNotes).catch(() => {});
+  const loadGuestReqs = () => isStaff && api('/users/guest-requests', { cache: false }).then(setGuestReqs).catch(() => {});
+
   useEffect(() => {
     loadNotes();
-    return subscribe((ev) => { if (ev === 'notification') loadNotes(); if (ev === 'settings') reloadSettings(); });
-  }, []);
+    loadGuestReqs();
+    const timer = setInterval(() => { loadNotes(); loadGuestReqs(); }, 20000);
+    const unsub = subscribe((ev, d) => {
+      if (ev === 'notification') loadNotes();
+      if (ev === 'settings') reloadSettings();
+      if (ev === 'guest_request') {
+        loadGuestReqs();
+        if (isStaff && d?.approval_status === 'pending') {
+          toast('🪪 New Guest registration awaiting approval!');
+        }
+      }
+    });
+    return () => { clearInterval(timer); unsub(); };
+  }, [isStaff]);
   useEffect(() => { setDrawerOpen(false); }, [loc.pathname]);
 
   const unread = notes.filter((n) => !n.read).length;
+  const pendingGuests = guestReqs.filter((g) => g.approval_status === 'pending');
   const items = NAV.filter((n) => user && n.roles.includes(user.role));
   const currentTitle = items.find((i) => loc.pathname.startsWith(i.to))?.label || (loc.pathname === '/account' ? 'Profile & PIN' : settings.bar_name);
   const initials = (user?.name || 'U').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+
+  const handleGuestDecision = async (g: any, action: 'approve' | 'reject') => {
+    try {
+      const customLimit = guestLimits[g.id];
+      await api(`/users/${g.id}/approve-guest`, {
+        method: 'POST',
+        body: { action, ...(customLimit !== undefined && customLimit !== '' ? { alcohol_limit: Number(customLimit) } : {}) },
+      });
+      toast(action === 'approve' ? `✔ Approved guest ${g.rank} ${g.name} (Admin notified)` : `Declined guest ${g.name}`);
+      loadGuestReqs();
+      loadNotes();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
 
   const SidebarContent = (
     <div className="flex h-full flex-col bg-white dark:bg-[#1C2230]">
@@ -61,7 +94,7 @@ export default function Layout() {
         <img src={settings.logo || '/Login_logo.png'} className="h-11 w-11 shrink-0 rounded-xl object-contain" alt="" />
         <div className="min-w-0">
           <div className="font-ubuntu truncate text-base font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3]">
-            {settings.bar_name || "DIVINA OFFICERS's BAR"}
+            {settings.bar_name || "DIVINA OFFICERS' BAR"}
           </div>
           <div className="text-[11px] font-semibold uppercase tracking-widest text-[#94A3B8]">Horizon POS</div>
         </div>
@@ -87,11 +120,35 @@ export default function Layout() {
                   {ICONS[n.to]}
                 </span>
                 <span className="truncate">{n.label}</span>
+                {n.to === '/orders' && pendingGuests.length > 0 && (
+                  <span className="ml-auto mr-2 rounded-full bg-[#FBBF24] px-2 py-0.5 text-[10px] font-extrabold text-[#1B2559]">
+                    {pendingGuests.length}
+                  </span>
+                )}
                 {isActive && <span className="absolute right-0 top-1/2 h-9 w-1 -translate-y-1/2 rounded-l-full bg-[#422AFB] dark:bg-[#818CF8]" />}
               </>
             )}
           </NavLink>
         ))}
+
+        {/* Quick Guest Approvals trigger in sidebar for Bartender & Admin */}
+        {isStaff && (
+          <button
+            type="button"
+            onClick={() => { setDrawerOpen(false); loadGuestReqs(); setShowGuestModal(true); }}
+            className="group relative flex w-full items-center gap-3.5 py-3 pr-4 text-left text-sm font-medium text-[#707EAE] transition-colors hover:text-[#1B2559] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]"
+          >
+            <span className="text-[#94A3B8] group-hover:text-[#422AFB] dark:group-hover:text-[#818CF8]">
+              <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-7 7v-1c0-2.66 5.33-4 7-4 .36 0 .74.02 1.13.06-.08.31-.13.62-.13.94 0 1.66 1.01 3.09 2.45 3.71-.91.19-1.91.29-2.95.29H5zm14.5-1.5-2.5 2.5-1.5-1.5 1-1 .5.5 1.5-1.5 1 1z" /></svg>
+            </span>
+            <span className="truncate">Guest Approvals</span>
+            {pendingGuests.length > 0 && (
+              <span className="ml-auto mr-2 rounded-full bg-[#FBBF24] px-2 py-0.5 text-[10px] font-extrabold text-[#1B2559]">
+                {pendingGuests.length}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Officer Profile Card at Bottom */}
@@ -160,6 +217,16 @@ export default function Layout() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="h-5 w-5"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
 
+            {/* Instant Guest Approval Pill for Bartender & Admin on EVERY page */}
+            {isStaff && pendingGuests.length > 0 && (
+              <button
+                onClick={() => { loadGuestReqs(); setShowGuestModal(true); }}
+                className="flex animate-pulse items-center gap-1.5 rounded-full bg-[#FBBF24] px-3 py-1.5 text-xs font-extrabold text-[#1B2559] shadow-sm transition hover:brightness-105"
+              >
+                🪪 <span>{pendingGuests.length} Guest Request{pendingGuests.length > 1 ? 's' : ''}</span>
+              </button>
+            )}
+
             {/* Connection Status Pill */}
             <span className={cx('flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold', c.online ? 'bg-[#10B981]/15 text-[#10B981]' : 'bg-[#F87171]/15 text-[#F87171]')}>
               <span className={cx('h-2 w-2 rounded-full', c.online ? 'bg-[#10B981]' : 'bg-[#F87171]')} />
@@ -179,13 +246,36 @@ export default function Layout() {
               </button>
               {showNotes && (
                 <div className="horizon-pill-shadow absolute right-0 z-40 mt-3 max-h-96 w-80 overflow-auto rounded-[20px] border border-[#E9EDF7] bg-white p-3 dark:border-[#2E384D] dark:bg-[#1C2230]">
-                  <div className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Notifications</div>
+                  <div className="mb-2 flex items-center justify-between px-1">
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Notifications</span>
+                    {isStaff && pendingGuests.length > 0 && (
+                      <button
+                        className="text-xs font-bold text-[#422AFB] underline dark:text-[#818CF8]"
+                        onClick={() => { setShowNotes(false); loadGuestReqs(); setShowGuestModal(true); }}
+                      >
+                        Review {pendingGuests.length} Guest(s) →
+                      </button>
+                    )}
+                  </div>
                   {notes.length === 0 && <div className="p-4 text-center text-sm text-[#94A3B8]">No notifications</div>}
                   {notes.map((n) => (
-                    <div key={n.id} className="rounded-xl p-2.5 text-sm hover:bg-[#F4F7FE] dark:hover:bg-[#252D3D]">
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => {
+                        setShowNotes(false);
+                        if (isStaff && /guest registration/i.test(n.message)) {
+                          loadGuestReqs();
+                          setShowGuestModal(true);
+                        } else if (n.link) {
+                          nav(n.link);
+                        }
+                      }}
+                      className="block w-full rounded-xl p-2.5 text-left text-sm transition hover:bg-[#F4F7FE] dark:hover:bg-[#252D3D]"
+                    >
                       <div className="font-medium text-[#1B2559] dark:text-[#E6EDF3]">{n.message}</div>
                       <div className="mt-0.5 text-xs text-[#94A3B8]">{fmtDate(n.at)}</div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -239,6 +329,75 @@ export default function Layout() {
           ))}
         </nav>
       </div>
+
+      {/* Global Guest Approval Center Modal (Bartender & Admin) */}
+      <Modal open={showGuestModal} onClose={() => setShowGuestModal(false)} title="Guest Registration Approvals" wide>
+        <div className="space-y-4">
+          <p className="text-xs text-[#94A3B8]">
+            Approve or decline visiting Guest requests. Approving grants QR ordering access and automatically notifies the Admin.
+            Global Guest alcohol limit: <b>{Number(settings.guest_alcohol_limit || 0) > 0 ? `${settings.guest_alcohol_limit} Small/Large pegs ${settings.alcohol_limit_scope === 'order' ? 'per order' : 'per day'}` : 'Unlimited'}</b>.
+          </p>
+          {pendingGuests.length === 0 ? (
+            <div className="rounded-2xl bg-[#F4F7FE] py-8 text-center text-sm font-medium text-[#94A3B8] dark:bg-[#252D3D]">
+              No pending guest registration requests right now.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {pendingGuests.map((g) => (
+                <div key={g.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#FBBF24]/40 bg-[#FBBF24]/10 p-3.5">
+                  <div>
+                    <div className="text-base font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{g.rank} {g.name}</div>
+                    <div className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+                      Service No: <b>{g.service_no}</b> {g.mobile && `· Mobile: ${g.mobile}`} · Requested {fmtDate(g.created_at)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-[#94A3B8]">Peg limit:</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={20}
+                        placeholder={settings.guest_alcohol_limit || '3'}
+                        value={guestLimits[g.id] ?? ''}
+                        onChange={(e) => setGuestLimits({ ...guestLimits, [g.id]: e.target.value })}
+                        className="!w-20 !min-h-9 !py-1 !text-xs"
+                        title="Leave blank for global Guest limit"
+                      />
+                    </div>
+                    <Button size="sm" variant="success" onClick={() => handleGuestDecision(g, 'approve')}>✔ Approve</Button>
+                    <Button size="sm" variant="danger" onClick={() => handleGuestDecision(g, 'reject')}>✕ Decline</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {guestReqs.filter((g) => g.approval_status !== 'pending').length > 0 && (
+            <div className="pt-2">
+              <div className="mb-2 text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Recent Guests</div>
+              <div className="max-h-56 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#94A3B8]">
+                    <tr><th className="py-1.5">Guest</th><th>Service No</th><th>Limit</th><th>Status</th><th>By</th></tr>
+                  </thead>
+                  <tbody>
+                    {guestReqs.filter((g) => g.approval_status !== 'pending').slice(0, 15).map((g) => (
+                      <tr key={g.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
+                        <td className="py-1.5 font-bold">{g.rank} {g.name}</td>
+                        <td>{g.service_no}</td>
+                        <td>{g.alcohol_limit != null ? `${g.alcohol_limit} pegs` : `Default (${settings.guest_alcohol_limit || '∞'})`}</td>
+                        <td><Badge s={g.approval_status === 'approved' ? 'approved' : 'cancelled'}>{g.approval_status}</Badge></td>
+                        <td>{g.approved_by_name || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

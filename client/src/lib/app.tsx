@@ -2,19 +2,28 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api, setToken, getToken } from './api';
 
 export type Role = 'admin' | 'member' | 'bartender' | 'customer' | 'guest';
-export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; must_change_pin?: number }
-export interface Settings { bar_name: string; currency: string; logo: string; background: string; theme: string; accent: string; peg_sizes: string; approval_hours: string; bar_address?: string; bar_phone?: string; lan?: string[]; port?: number }
+export interface AlcoholUsage { limit: number; used: number; remaining: number | null; scope: 'day' | 'order'; unit: 'pegs' | 'small_eq' }
+export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; alcohol_limit?: number | null; alcohol_usage?: AlcoholUsage; must_change_pin?: number }
+export interface Settings {
+  bar_name: string; currency: string; logo: string; background: string; theme: string; accent: string; peg_sizes: string; approval_hours: string;
+  guest_alcohol_limit?: string; member_alcohol_limit?: string; alcohol_limit_scope?: string; alcohol_limit_unit?: string;
+  bar_address?: string; bar_phone?: string; lan?: string[]; port?: number;
+}
 
 interface Ctx {
   user: User | null; ready: boolean; settings: Settings;
   login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest') => Promise<User>; logout: () => void;
+  reloadUser: () => Promise<void>;
   reloadSettings: () => Promise<void>; dark: boolean; toggleDark: () => void;
   toast: (text: string, type?: 'ok' | 'error') => void; money: (n: number) => string;
 }
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
 
-const DEFAULTS: Settings = { bar_name: "DIVINA OFFICERS' BAR", currency: '₹', logo: '/Login_logo.png', background: '/Login_bg.webp', theme: 'dark', accent: '#f59e0b', peg_sizes: '30,60', approval_hours: '24' };
+const DEFAULTS: Settings = {
+  bar_name: "DIVINA OFFICERS' BAR", currency: '₹', logo: '/Login_logo.png', background: '/Login_bg.webp', theme: 'dark', accent: '#f59e0b',
+  peg_sizes: '30,60', approval_hours: '24', guest_alcohol_limit: '3', member_alcohol_limit: '0', alcohol_limit_scope: 'day', alcohol_limit_unit: 'pegs',
+};
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -35,6 +44,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSettings({ ...DEFAULTS, ...s });
       if (!localStorage.getItem('theme')) setDark(s.theme !== 'light');
     } catch { /* offline: keep defaults / cache */ }
+  }, []);
+
+  const reloadUser = useCallback(async () => {
+    if (!getToken()) return;
+    try {
+      const u = await api<User>('/auth/me', { cache: false });
+      setUser(u);
+      localStorage.setItem('user', JSON.stringify(u));
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -60,6 +78,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToken(r.token);
     localStorage.setItem('user', JSON.stringify(r.user));
     setUser(r.user);
+    reloadUser();
     return r.user;
   };
   const logout = () => { setToken(null); localStorage.removeItem('user'); setUser(null); };
@@ -67,7 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const money = (n: number) => `${settings.currency}${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
   return (
-    <AppCtx.Provider value={{ user, ready, settings, login, logout, reloadSettings, dark, toggleDark, toast, money }}>
+    <AppCtx.Provider value={{ user, ready, settings, login, logout, reloadUser, reloadSettings, dark, toggleDark, toast, money }}>
       {children}
       <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
         {toasts.map((t) => (

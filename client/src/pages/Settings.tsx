@@ -73,6 +73,43 @@ export default function Settings() {
             </div>
           </Card>
 
+          <Card title="Alcohol Order Limits (Guest & Member Controls)">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field label="Guest Alcohol Limit (pegs)" hint="Set to 3, 4, etc. (0 = unlimited). Can be overridden per guest in Users.">
+                <div className="flex gap-1.5">
+                  <Input type="number" min={0} max={20} value={s.guest_alcohol_limit ?? '3'} onChange={(e) => setS({ ...s, guest_alcohol_limit: e.target.value })} />
+                  {['3', '4'].map((v) => (
+                    <Button key={v} type="button" size="sm" variant={String(s.guest_alcohol_limit) === v ? 'primary' : 'subtle'} onClick={() => setS({ ...s, guest_alcohol_limit: v })}>
+                      {v}
+                    </Button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Member Alcohol Limit (pegs)" hint="Set to 3, 4, etc. for all members (0 = unlimited).">
+                <div className="flex gap-1.5">
+                  <Input type="number" min={0} max={20} value={s.member_alcohol_limit ?? '0'} onChange={(e) => setS({ ...s, member_alcohol_limit: e.target.value })} />
+                  {['0', '3', '4'].map((v) => (
+                    <Button key={v} type="button" size="sm" variant={String(s.member_alcohol_limit) === v ? 'primary' : 'subtle'} onClick={() => setS({ ...s, member_alcohol_limit: v })}>
+                      {v === '0' ? '∞' : v}
+                    </Button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Limit Window">
+                <Select value={s.alcohol_limit_scope || 'day'} onChange={(e) => setS({ ...s, alcohol_limit_scope: e.target.value })}>
+                  <option value="day">Per Day (resets midnight)</option>
+                  <option value="order">Per Order</option>
+                </Select>
+              </Field>
+              <Field label="Counting Rule">
+                <Select value={s.alcohol_limit_unit || 'pegs'} onChange={(e) => setS({ ...s, alcohol_limit_unit: e.target.value })}>
+                  <option value="pegs">Each Small (30ml) or Large (60ml) = 1 peg</option>
+                  <option value="small_eq">30 ml Small-equivalents (1 Large = 2 Smalls)</option>
+                </Select>
+              </Field>
+            </div>
+          </Card>
+
           <Card title="POS, Inventory, Approval & Report Preferences">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Field label="Standard peg sizes" hint="Fixed: Small (30 ml) & Large (60 ml). Full bottle (750 ml) is restricted to Bartender & Admin."><Input value="30, 60 (Small / Large)" disabled /></Field>

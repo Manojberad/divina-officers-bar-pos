@@ -12,7 +12,7 @@ interface Line { key: string; product_id: number; name: string; image?: string; 
 const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${ml || ''}`;
 
 export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void }) {
-  const { user, money, toast } = useApp();
+  const { user, money, toast, reloadUser } = useApp();
   const staff = mode === 'staff' || (user != null && ['admin', 'bartender'].includes(user.role));
   const [products, setProducts] = useState<Product[]>(preload?.products || []);
   const [categories, setCategories] = useState<any[]>(preload?.categories || []);
@@ -79,7 +79,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
       if (r.queued) toast('Server unreachable – order queued and will sync automatically');
       else toast(`Order ${r.order.order_no} ${status === 'draft' ? 'saved as draft' : 'placed'}`);
       setCart([]); setOpts({ ...opts, notes: '', type: 'ondemand', scheduled_at: '', user_id: '' }); setShowCart(false);
-      load(); onPlaced?.();
+      load(); reloadUser(); onPlaced?.();
     } catch (e: any) { toast(e.message, 'error'); } finally { setBusy(false); }
   };
 
@@ -160,6 +160,19 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   return (
     <div className="flex h-full min-h-0 gap-4 p-2">
       <section className="flex min-w-0 flex-1 flex-col">
+        {/* Live Alcohol Order Limit Bar for Guests & Limited Members */}
+        {!staff && user?.alcohol_usage && user.alcohol_usage.limit > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#422AFB]/20 bg-[#422AFB]/10 px-4 py-2 text-xs font-bold text-[#1B2559] dark:border-[#818CF8]/25 dark:bg-[#6366F1]/15 dark:text-[#E6EDF3]">
+            <span>
+              🥃 Alcohol Order Limit: <b>{user.alcohol_usage.limit}</b> {user.alcohol_usage.unit === 'small_eq' ? 'Small (30 ml) equivalents' : 'Small/Large pegs'} {user.alcohol_usage.scope === 'order' ? 'per order' : 'per day'}
+            </span>
+            {user.alcohol_usage.scope === 'day' && (
+              <span className={user.alcohol_usage.remaining === 0 ? 'text-[#EE5D50]' : 'text-[#10B981]'}>
+                Used today: {user.alcohol_usage.used} · Remaining: {user.alcohol_usage.remaining}
+              </span>
+            )}
+          </div>
+        )}
         {/* Search & Pill Category Bar */}
         <div className="mb-3 space-y-3">
           <Input placeholder="🔍  Search drinks, brands or snacks…" value={search} onChange={(e) => setSearch(e.target.value)} />

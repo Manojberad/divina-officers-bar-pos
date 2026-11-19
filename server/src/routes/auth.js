@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { q, audit, notify, now } from '../db.js';
 import { hashPin, verifyPin, signToken, requireAuth } from '../auth.js';
 import { broadcast } from '../events.js';
+import { getAlcoholUsage } from '../services.js';
 
 const r = Router();
 const attempts = new Map(); // simple brute-force throttle per key
@@ -144,8 +145,8 @@ r.get('/guest-status/:service_no', (req, res) => {
 });
 
 r.get('/me', requireAuth, (req, res) => {
-  const u = q.get('SELECT id, name, service_no, rank, mobile, email, category, role, approval_status, must_change_pin FROM users WHERE id=?', req.user.id);
-  res.json(u);
+  const u = q.get('SELECT id, name, service_no, rank, mobile, email, category, role, approval_status, alcohol_limit, must_change_pin FROM users WHERE id=?', req.user.id);
+  res.json({ ...u, alcohol_usage: getAlcoholUsage(u) });
 });
 
 r.post('/change-pin', requireAuth, (req, res) => {

@@ -12,7 +12,7 @@ import { broadcast } from '../events.js';
 const r = Router();
 const admin = requireRole('admin');
 const jsonUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 300e6 } });
-const PUBLIC_KEYS = ['bar_name', 'bar_address', 'bar_phone', 'currency', 'logo', 'background', 'theme', 'accent', 'peg_sizes', 'approval_hours'];
+const PUBLIC_KEYS = ['bar_name', 'bar_address', 'bar_phone', 'currency', 'logo', 'background', 'theme', 'accent', 'peg_sizes', 'approval_hours', 'guest_alcohol_limit', 'member_alcohol_limit', 'alcohol_limit_scope', 'alcohol_limit_unit'];
 
 r.get('/settings/public', (_req, res) => {
   const s = getSettings();

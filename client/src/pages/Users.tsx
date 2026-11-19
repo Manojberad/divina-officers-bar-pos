@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Badge, Button, Card, Field, Input, Modal, Select } from '../components/ui';
 
-const BLANK = { name: '', service_no: '', rank: '', mobile: '', email: '', category: 'POSTED', role: 'member', pin: '', active: 1 };
+const BLANK = { name: '', service_no: '', rank: '', mobile: '', email: '', category: 'POSTED', role: 'member', pin: '', alcohol_limit: '', active: 1 };
 
 const CAT_LABEL: Record<string, string> = {
   POSTED: 'Posted-In Officer',
@@ -20,11 +20,26 @@ const CAT_BADGE: Record<string, string> = {
 };
 
 export default function Users() {
-  const { toast } = useApp();
+  const { toast, settings, reloadSettings } = useApp();
   const [users, setUsers] = useState<any[]>([]);
   const [ed, setEd] = useState<any>(null);
   const [pinModal, setPinModal] = useState<any>(null);
   const [newPin, setNewPin] = useState('');
+  const [guestLimitVal, setGuestLimitVal] = useState(settings.guest_alcohol_limit ?? '3');
+  const [memberLimitVal, setMemberLimitVal] = useState(settings.member_alcohol_limit ?? '0');
+
+  useEffect(() => {
+    setGuestLimitVal(settings.guest_alcohol_limit ?? '3');
+    setMemberLimitVal(settings.member_alcohol_limit ?? '0');
+  }, [settings.guest_alcohol_limit, settings.member_alcohol_limit]);
+
+  const saveQuickLimits = async () => {
+    try {
+      await api('/admin/settings', { method: 'PUT', body: { guest_alcohol_limit: guestLimitVal, member_alcohol_limit: memberLimitVal } });
+      await reloadSettings();
+      toast('Alcohol order limits updated');
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
 
   const load = () => api('/users', { cache: false }).then(setUsers);
   useEffect(() => { load(); }, []);
@@ -94,6 +109,37 @@ export default function Users() {
 
   return (
     <div className="space-y-4 p-4">
+      {/* Admin Alcohol Order Limit Controls (Guest & Member) */}
+      <Card title="🥃 Alcohol Order Limits (Small 30ml / Large 60ml)">
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="min-w-[210px] flex-1">
+            <Field label="Guest Alcohol Limit (pegs)" hint="Default max Small/Large pegs per Guest">
+              <div className="flex gap-1.5">
+                <Input type="number" min={0} max={20} value={guestLimitVal} onChange={(e) => setGuestLimitVal(e.target.value)} />
+                {['3', '4', '0'].map((v) => (
+                  <Button key={v} type="button" size="sm" variant={String(guestLimitVal) === v ? 'primary' : 'subtle'} onClick={() => setGuestLimitVal(v)}>
+                    {v === '0' ? '∞' : `${v}`}
+                  </Button>
+                ))}
+              </div>
+            </Field>
+          </div>
+          <div className="min-w-[210px] flex-1">
+            <Field label="Member Alcohol Limit (pegs)" hint="Default max Small/Large pegs per Member (0 = unlimited)">
+              <div className="flex gap-1.5">
+                <Input type="number" min={0} max={20} value={memberLimitVal} onChange={(e) => setMemberLimitVal(e.target.value)} />
+                {['0', '3', '4'].map((v) => (
+                  <Button key={v} type="button" size="sm" variant={String(memberLimitVal) === v ? 'primary' : 'subtle'} onClick={() => setMemberLimitVal(v)}>
+                    {v === '0' ? '∞' : `${v}`}
+                  </Button>
+                ))}
+              </div>
+            </Field>
+          </div>
+          <Button onClick={saveQuickLimits}>Save Limits</Button>
+        </div>
+      </Card>
+
       {pendingGuests.length > 0 && (
         <Card title={`🪪 Pending Guest Registrations (${pendingGuests.length})`} className="!border-[#FBBF24]">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -139,27 +185,41 @@ export default function Users() {
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
-              <tr><th className="p-2">Name</th><th>Service / Staff No</th><th>Rank / Designation</th><th>Category</th><th>Role</th><th>Mobile</th><th>Email</th><th>Status</th><th /></tr>
+              <tr><th className="p-2">Name</th><th>Service / Staff No</th><th>Rank / Designation</th><th>Category</th><th>Role</th><th>Alcohol Limit</th><th>Mobile</th><th>Status</th><th /></tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {users.map((u) => {
+                const eff =
+                  u.alcohol_limit != null
+                    ? u.alcohol_limit === 0
+                      ? 'Unlimited'
+                      : `${u.alcohol_limit} pegs`
+                    : u.role === 'guest'
+                      ? Number(settings.guest_alcohol_limit || 0) > 0
+                        ? `Default (${settings.guest_alcohol_limit})`
+                        : 'Unlimited'
+                      : ['member', 'customer'].includes(u.role) && Number(settings.member_alcohol_limit || 0) > 0
+                        ? `Default (${settings.member_alcohol_limit})`
+                        : '—';
+                return (
                 <tr key={u.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
                   <td className="p-2 font-bold">{u.name}</td>
                   <td>{u.service_no}</td>
                   <td>{u.rank || '—'}</td>
                   <td><Badge s={CAT_BADGE[u.category] || 'accepted'}>{CAT_LABEL[u.category] || u.category}</Badge></td>
                   <td className="capitalize">{u.role}</td>
+                  <td className="text-xs font-semibold text-[#422AFB] dark:text-[#818CF8]">{eff}</td>
                   <td>{u.mobile || '—'}</td>
-                  <td>{u.email || '—'}</td>
                   <td>{u.approval_status === 'pending' ? <Badge s="pending">pending approval</Badge> : u.approval_status === 'rejected' ? <Badge s="cancelled">declined</Badge> : u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}</td>
                   <td className="space-x-1 text-right">
                     {u.role === 'guest' && u.approval_status === 'pending' && <Button size="sm" variant="success" onClick={() => approveGuest(u, 'approve')}>Approve</Button>}
-                    <Button size="sm" variant="subtle" onClick={() => setEd(u)}>Edit</Button>
+                    <Button size="sm" variant="subtle" onClick={() => setEd({ ...u, alcohol_limit: u.alcohol_limit ?? '' })}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => { setPinModal(u); setNewPin(''); }}>PIN</Button>
                     <Button size="sm" variant="ghost" onClick={async () => { if (confirm('Remove user?')) { await api(`/users/${u.id}`, { method: 'DELETE' }); load(); } }}>✕</Button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -211,6 +271,11 @@ export default function Users() {
             {!ed.id && (ed.category === 'TD' || ed.category === 'STAFF' || ed.category === 'GUEST') && (
               <Field label={`Initial PIN (blank = ${ed.category === 'STAFF' ? 'Staff ID' : 'Service No'})`}>
                 <Input value={ed.pin || ''} onChange={(e) => setEd({ ...ed, pin: e.target.value })} />
+              </Field>
+            )}
+            {['guest', 'member', 'customer'].includes(ed.role) && (
+              <Field label="Alcohol Limit Override (pegs)" hint="Blank = global default, 0 = unlimited, or 3 / 4 pegs">
+                <Input type="number" min={0} max={20} placeholder={ed.role === 'guest' ? `Default (${settings.guest_alcohol_limit || '3'})` : `Default (${settings.member_alcohol_limit || '0'})`} value={ed.alcohol_limit ?? ''} onChange={(e) => setEd({ ...ed, alcohol_limit: e.target.value })} />
               </Field>
             )}
             {ed.id && (

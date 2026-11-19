@@ -114,6 +114,34 @@ function nextOrderNo() {
   return `${prefix}-${String(n).padStart(4, '0')}`;
 }
 
+export function getAlcoholUsage(targetUser, settings = getSettings()) {
+  if (!targetUser) return { limit: 0, used: 0, scope: settings.alcohol_limit_scope || 'day', unit: settings.alcohol_limit_unit || 'pegs' };
+  const scope = settings.alcohol_limit_scope === 'order' ? 'order' : 'day';
+  const unit = settings.alcohol_limit_unit === 'small_eq' ? 'small_eq' : 'pegs';
+  let limit = 0;
+  if (targetUser.alcohol_limit != null && targetUser.alcohol_limit !== '') {
+    limit = Math.max(0, Number(targetUser.alcohol_limit) || 0);
+  } else if (targetUser.role === 'guest') {
+    limit = Math.max(0, Number(settings.guest_alcohol_limit || 0));
+  } else if (['member', 'customer'].includes(targetUser.role)) {
+    limit = Math.max(0, Number(settings.member_alcohol_limit || 0));
+  }
+  let used = 0;
+  if (limit > 0 && scope === 'day') {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const expr = unit === 'small_eq' ? 'CASE WHEN i.serve_type=\'peg\' THEN i.qty * (COALESCE(i.peg_ml, 30) / 30.0) ELSE 0 END' : 'CASE WHEN i.serve_type=\'peg\' THEN i.qty ELSE 0 END';
+    const row = q.get(
+      `SELECT COALESCE(SUM(${expr}), 0) n
+       FROM order_items i JOIN orders o ON o.id=i.order_id
+       WHERE o.user_id=? AND o.status NOT IN ('cancelled','draft') AND o.created_at>=?`,
+      targetUser.id, startOfDay.toISOString(),
+    );
+    used = Math.round((row?.n || 0) * 100) / 100;
+  }
+  return { limit, used, remaining: limit > 0 ? Math.max(0, Math.round((limit - used) * 100) / 100) : null, scope, unit };
+}
+
 export function createOrder(body, user) {
   const settings = getSettings();
   const isStaff = user && STAFF.includes(user.role);
@@ -124,7 +152,8 @@ export function createOrder(body, user) {
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, 'Order has no items');
   let userId = user?.id ?? null;
   if (isStaff) userId = body.user_id ? Number(body.user_id) : null;
-  if (userId && !q.get("SELECT id FROM users WHERE id=? AND active=1 AND approval_status='approved'", userId)) throw new HttpError(400, 'Unknown or unapproved customer');
+  const targetUser = userId ? q.get("SELECT id, name, role, alcohol_limit FROM users WHERE id=? AND active=1 AND approval_status='approved'", userId) : null;
+  if (userId && !targetUser) throw new HttpError(400, 'Unknown or unapproved customer');
   let tableId = body.table_id ? Number(body.table_id) : null;
   if (body.table_code) {
     const t = q.get('SELECT id FROM tables WHERE code=? AND active=1', body.table_code);
@@ -143,6 +172,26 @@ export function createOrder(body, user) {
     if (!p || !p.active) throw new HttpError(400, 'Product unavailable');
     return priceItem(p, it, settings, isStaff);
   });
+
+  // Enforce alcohol order limit (for Guests and/or Members as configured by Admin)
+  if (targetUser && status !== 'draft' && !(user?.role === 'admin' && body.override_limit)) {
+    const usage = getAlcoholUsage(targetUser, settings);
+    if (usage.limit > 0) {
+      const incoming = items.reduce((sum, i) => {
+        if (i.serve_type !== 'peg') return sum;
+        return sum + (usage.unit === 'small_eq' ? i.qty * ((i.peg_ml || 30) / 30) : i.qty);
+      }, 0);
+      if (incoming > 0 && usage.used + incoming > usage.limit + 1e-9) {
+        const unitLabel = usage.unit === 'small_eq' ? 'Small (30 ml) equivalents' : 'Small/Large pegs';
+        const scopeLabel = usage.scope === 'day' ? 'per day' : 'per order';
+        const roleLabel = targetUser.role === 'guest' ? 'Guest' : 'Member';
+        throw new HttpError(
+          400,
+          `${roleLabel} alcohol limit exceeded: maximum ${usage.limit} ${unitLabel} ${scopeLabel} allowed${usage.used > 0 ? ` (already ordered: ${usage.used}, requested: ${incoming})` : ` (requested: ${incoming})`}.`,
+        );
+      }
+    }
+  }
   // Availability check (aggregate per product)
   const need = {};
   items.forEach((i) => { need[i.product_id] = (need[i.product_id] || 0) + i.base_qty; });

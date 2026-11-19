@@ -170,6 +170,35 @@ const gCloseCash = await req(`/api/orders/${gOrd2.id}/status`, { method: 'POST',
 assert.equal(gCloseCash.status, 200);
 assert.equal(gCloseCash.data.payment_mode, 'cash');
 
+console.log('5d. Alcohol order limits (Admin configurable 3/4 Small/Large pegs for Guests & Members)…');
+// Guest already ordered 2 pegs today; default guest_alcohol_limit is 3 -> requesting 2 more (total 4 > 3) must fail
+assert.equal(
+  (await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 2 }] } })).status,
+  400,
+  'Guest blocked from exceeding default 3-peg alcohol limit',
+);
+// Admin updates guest_alcohol_limit to 4 and member_alcohol_limit to 3
+assert.equal((await req('/api/admin/settings', { method: 'PUT', token: adminTok, body: { guest_alcohol_limit: '4', member_alcohol_limit: '3' } })).status, 200);
+// Now Guest ordering 2 more (total 4 <= 4) succeeds, and 1 more (total 5 > 4) fails
+assert.equal(
+  (await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 2 }] } })).status,
+  201,
+  'Guest allowed up to updated 4-peg limit',
+);
+assert.equal(
+  (await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }] } })).status,
+  400,
+  'Guest blocked on 5th peg when limit is 4',
+);
+// Member trying to order 4 pegs when member_alcohol_limit is 3 fails
+assert.equal(
+  (await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 4 }] } })).status,
+  400,
+  'Member blocked from exceeding configured 3-peg limit',
+);
+// Reset member limit back to 0 (unlimited)
+await req('/api/admin/settings', { method: 'PUT', token: adminTok, body: { member_alcohol_limit: '0' } });
+
 console.log('6. Inventory purchase, wastage, reconciliation & alerts…');
 await req('/api/inventory/movement', { method: 'POST', token: adminTok, body: { product_id: 1, type: 'purchase', qty: 2, unit_cost: 920, supplier: 'CSD Depot', invoice: 'INV-99' } });
 await req('/api/inventory/movement', { method: 'POST', token: btTok, body: { product_id: 1, type: 'wastage', ml: 30, note: 'Broken glass' } });
