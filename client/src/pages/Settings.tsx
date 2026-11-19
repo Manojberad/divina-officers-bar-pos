@@ -75,7 +75,7 @@ export default function Settings() {
 
           <Card title="POS, Inventory, Approval & Report Preferences">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Field label="Standard peg sizes (ml, comma-separated)"><Input value={s.peg_sizes} onChange={(e) => setS({ ...s, peg_sizes: e.target.value })} /></Field>
+              <Field label="Standard peg sizes" hint="Fixed: Small (30 ml) & Large (60 ml). Full bottle (750 ml) is restricted to Bartender & Admin."><Input value="30, 60 (Small / Large)" disabled /></Field>
               <Field label="Inventory deduction stage">
                 <Select value={s.deduct_on} onChange={(e) => setS({ ...s, deduct_on: e.target.value })}><option value="served">When order is Served</option><option value="accepted">When order is Accepted</option></Select>
               </Field>

@@ -48,8 +48,8 @@ export function optionalAuth(req, _res, next) {
   const token = h.startsWith('Bearer ') ? h.slice(7) : req.query.token;
   const p = verifyToken(token);
   if (p) {
-    const u = q.get('SELECT id, name, service_no, rank, role, category, active, must_change_pin FROM users WHERE id=?', p.uid);
-    if (u && u.active) req.user = u;
+    const u = q.get('SELECT id, name, service_no, rank, role, category, active, approval_status, must_change_pin FROM users WHERE id=?', p.uid);
+    if (u && u.active && u.approval_status === 'approved') req.user = u;
   }
   next();
 }

@@ -102,7 +102,7 @@ export function seed({ withOrders = true } = {}) {
   const tables = q.all('SELECT id FROM tables');
   let rnd = 7;
   const rand = (n) => { rnd = (rnd * 9301 + 49297) % 233280; return Math.floor((rnd / 233280) * n); };
-  const pegSizes = [30, 60, 90];
+  const pegSizes = [30, 60];
   for (let k = 0; k < 60; k++) {
     const daysAgo = 29 - Math.floor(k / 2);
     const items = [];
@@ -110,7 +110,7 @@ export function seed({ withOrders = true } = {}) {
     for (let j = 0; j < n; j++) {
       const p = prods[rand(prods.length)];
       const cur = getProduct(p.id);
-      const it = p.is_peg ? { product_id: p.id, serve_type: 'peg', peg_ml: pegSizes[rand(3)], qty: 1 } : { product_id: p.id, serve_type: 'unit', qty: 1 + rand(2) };
+      const it = p.is_peg ? { product_id: p.id, serve_type: 'peg', peg_ml: pegSizes[rand(2)], qty: 1 } : { product_id: p.id, serve_type: 'unit', qty: 1 + rand(2) };
       const need = p.is_peg ? it.peg_ml : it.qty;
       if (cur.stock - need > toBase(cur, 1)) items.push(it);
     }
@@ -139,7 +139,7 @@ export function seed({ withOrders = true } = {}) {
   createOrder({ user_id: ids['IC-51234'], table_id: tables[0].id, items: [{ product_id: ro, serve_type: 'peg', peg_ml: 60, qty: 2 }, { product_id: lager, qty: 1 }], notes: 'Less ice' }, { id: ids.BT001, role: 'bartender' });
   createOrder({ table_code: q.get('SELECT code FROM tables WHERE id=?', tables[2].id).code, items: [{ product_id: lager, qty: 2 }], source: 'qr' }, { id: ids['IC-62345'], role: 'member' });
   const tomorrow = new Date(Date.now() + 86400e3); tomorrow.setHours(20, 0, 0, 0);
-  createOrder({ type: 'prebooked', scheduled_at: tomorrow.toISOString(), items: [{ product_id: ro, serve_type: 'bottle', qty: 1 }], notes: 'Birthday party, 6 guests' }, { id: ids['IC-40001'], role: 'member' });
+  createOrder({ type: 'prebooked', scheduled_at: tomorrow.toISOString(), items: [{ product_id: ro, serve_type: 'peg', peg_ml: 60, qty: 4 }], notes: 'Birthday party, 6 guests' }, { id: ids['IC-40001'], role: 'member' });
   // One closed order awaiting approval for Lt Col Sharma
   const { order } = createOrder({ user_id: ids['IC-51234'], items: [{ product_id: lager, qty: 2 }] }, { id: ids.BT001, role: 'bartender' });
   transition(order.id, 'served', { id: ids.BT001, role: 'bartender' });

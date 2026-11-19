@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { api } from '../lib/api';
 import { useApp } from '../lib/app';
 import { homeFor } from '../App';
 
@@ -16,6 +17,25 @@ export default function Login() {
   const [err, setErr] = useState('');
   const [shake, setShake] = useState(false);
   const [focusedField, setFocusedField] = useState<'sn' | 'pin' | null>(null);
+  const [guestOpen, setGuestOpen] = useState(false);
+  const [gForm, setGForm] = useState({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
+  const [gMsg, setGMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [gBusy, setGBusy] = useState(false);
+
+  const registerGuest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGBusy(true);
+    setGMsg(null);
+    try {
+      const r = await api('/auth/guest-register', { method: 'POST', body: gForm });
+      setGMsg({ type: 'ok', text: r.message || 'Registration submitted! Waiting for bartender approval.' });
+      setGForm({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
+    } catch (e: any) {
+      setGMsg({ type: 'err', text: e.message || 'Registration failed' });
+    } finally {
+      setGBusy(false);
+    }
+  };
 
   const bgImg = !settings.background || /^\/Login_bg\.(jpg|png|webp)$/i.test(settings.background) ? '/Login_bg.webp' : settings.background;
   const logoImg = settings.logo || '/Login_logo.png';
@@ -379,13 +399,59 @@ export default function Login() {
             )}
           </button>
 
-          <div className="mt-5 flex items-center justify-center gap-2 text-[9px] font-semibold tracking-[.24em] text-[#d7b66f]">
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={() => { setGMsg(null); setGuestOpen(true); }}
+              className="text-xs font-semibold tracking-wide text-[#f1dfbd]/90 underline decoration-[#ffc65c]/60 underline-offset-4 transition-colors hover:text-[#ffe8a0]"
+            >
+              Visiting Guest? Register for Bar Access →
+            </button>
+          </div>
+
+          <div className="mt-4 flex items-center justify-center gap-2 text-[9px] font-semibold tracking-[.24em] text-[#d7b66f]">
             <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#b98a39]/70" />
             <span>GOOD TIMES&nbsp; • &nbsp;GREAT COMPANY&nbsp; • &nbsp;OFFICERS' BAR</span>
             <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#b98a39]/70" />
           </div>
         </form>
       </div>
+
+      {/* Gold-Themed Guest Self-Registration Modal */}
+      {guestOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs" onClick={() => setGuestOpen(false)}>
+          <form
+            onSubmit={registerGuest}
+            onClick={(e) => e.stopPropagation()}
+            className="login-panel w-full max-w-md rounded-[26px] p-6 text-white sm:p-7"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="gold-title font-ubuntu text-xl font-extrabold tracking-wider">GUEST REGISTRATION</h3>
+              <button type="button" onClick={() => setGuestOpen(false)} className="rounded-full px-2.5 py-1 text-xl text-[#e7c98f] hover:bg-white/10">×</button>
+            </div>
+            <p className="mb-4 text-xs text-[#d8d4cc]">
+              Register with your Service No., Rank & Name. The bartender will approve your request (notified to Admin). Checkout is settled via Cash or UPI.
+            </p>
+            <div className="space-y-3">
+              <input type="text" required placeholder="Service Number *" value={gForm.service_no} onChange={(e) => setGForm({ ...gForm, service_no: e.target.value })} autoCapitalize="characters" className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+              <input type="text" required placeholder="Rank * (e.g. Maj, Capt, Wg Cdr, Mr/Ms)" value={gForm.rank} onChange={(e) => setGForm({ ...gForm, rank: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+              <input type="text" required placeholder="Full Name *" value={gForm.name} onChange={(e) => setGForm({ ...gForm, name: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+              <div className="grid grid-cols-2 gap-2.5">
+                <input type="text" placeholder="Mobile (optional)" value={gForm.mobile} onChange={(e) => setGForm({ ...gForm, mobile: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                <input type="password" placeholder="PIN (blank = Service No)" value={gForm.pin} onChange={(e) => setGForm({ ...gForm, pin: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+              </div>
+              {gMsg && (
+                <div className={`rounded-xl px-3 py-2 text-center text-xs font-medium ${gMsg.type === 'ok' ? 'border border-emerald-400/40 bg-emerald-950/70 text-emerald-200' : 'border border-red-400/40 bg-red-950/70 text-red-200'}`}>
+                  {gMsg.text}
+                </div>
+              )}
+              <button type="submit" disabled={gBusy} className="gold-button mt-2 flex h-11 w-full items-center justify-center rounded-xl text-sm font-extrabold">
+                {gBusy ? 'Submitting…' : 'Submit for Bartender Approval'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

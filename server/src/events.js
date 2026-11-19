@@ -17,8 +17,8 @@ export function sseHandler(req, res) {
 export function broadcast(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const c of clients) {
-    // Customers only receive events about their own orders.
-    if (c.user && ['customer', 'member'].includes(c.user.role) && data?.user_id && data.user_id !== c.user.id) continue;
+    // Non-staff only receive events about their own orders (and guests/public receive guest_request updates)
+    if (event === 'order' && c.user && ['customer', 'member', 'guest'].includes(c.user.role) && data?.user_id && data.user_id !== c.user.id) continue;
     try { c.res.write(msg); } catch { /* ignore */ }
   }
 }

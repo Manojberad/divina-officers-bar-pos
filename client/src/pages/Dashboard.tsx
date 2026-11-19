@@ -98,8 +98,13 @@ export default function Dashboard() {
       </div>
 
       {/* Quick Action Alert Banners */}
-      {(d.pending.disputed > 0 || d.alerts.length > 0 || d.pending.prebooked > 0) && (
+      {(d.pending.disputed > 0 || d.alerts.length > 0 || d.pending.prebooked > 0 || d.pending.guest_requests > 0) && (
         <div className="flex flex-wrap gap-3">
+          {d.pending.guest_requests > 0 && (
+            <Link to="/users" className="inline-flex items-center gap-2 rounded-2xl bg-[#38BDF8] px-4 py-2.5 text-xs font-bold text-[#0F172A] shadow-md">
+              🪪 {d.pending.guest_requests} pending guest registration(s)
+            </Link>
+          )}
           {d.pending.disputed > 0 && (
             <Link to="/orders" className="inline-flex items-center gap-2 rounded-2xl bg-[#E05252] px-4 py-2.5 text-xs font-bold text-white shadow-md">
               ⚠️ {d.pending.disputed} disputed order(s) need resolution
@@ -242,8 +247,45 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Row 3: Tables */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+      {/* Row 3: Tables + Guest Cash/UPI Accounting */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-4">
+        <Card title="Guest Payments (Cash vs UPI)" actions={<Link to="/reports" className="text-xs font-bold text-[#422AFB] dark:text-[#818CF8]">View Register →</Link>}>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-2xl bg-[#F4F7FE] p-3.5 dark:bg-[#252D3D]">
+              <div className="text-xs font-bold text-[#94A3B8]">💵 Cash</div>
+              <div className="mt-1 text-xl font-extrabold text-[#10B981] dark:text-[#34D399]">{money(d.guestPayments?.cash?.revenue || 0)}</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">{d.guestPayments?.cash?.orders || 0} orders</div>
+            </div>
+            <div className="rounded-2xl bg-[#F4F7FE] p-3.5 dark:bg-[#252D3D]">
+              <div className="text-xs font-bold text-[#94A3B8]">📱 UPI</div>
+              <div className="mt-1 text-xl font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(d.guestPayments?.upi?.revenue || 0)}</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">{d.guestPayments?.upi?.orders || 0} orders</div>
+            </div>
+            <div className="rounded-2xl bg-[#F4F7FE] p-3.5 dark:bg-[#252D3D]">
+              <div className="text-xs font-bold text-[#94A3B8]">Total Guest</div>
+              <div className="mt-1 text-xl font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{money(d.guestPayments?.total?.revenue || 0)}</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">{d.guestPayments?.total?.orders || 0} orders</div>
+            </div>
+            <div className="rounded-2xl bg-[#F4F7FE] p-3.5 dark:bg-[#252D3D]">
+              <div className="text-xs font-bold text-[#94A3B8]">Member Billing</div>
+              <div className="mt-1 text-xl font-extrabold text-[#38BDF8]">{money(d.guestPayments?.memberBill?.revenue || 0)}</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">{d.guestPayments?.memberBill?.orders || 0} orders</div>
+            </div>
+          </div>
+          {(d.guestPayments?.total?.revenue || 0) > 0 && (
+            <div className="mt-3">
+              <div className="mb-1 flex justify-between text-[11px] font-bold text-[#94A3B8]">
+                <span>Cash {Math.round(((d.guestPayments.cash.revenue || 0) / d.guestPayments.total.revenue) * 100)}%</span>
+                <span>UPI {Math.round(((d.guestPayments.upi.revenue || 0) / d.guestPayments.total.revenue) * 100)}%</span>
+              </div>
+              <div className="flex h-2.5 overflow-hidden rounded-full bg-[#E9EDF7] dark:bg-[#252D3D]">
+                <div className="bg-[#10B981]" style={{ width: `${((d.guestPayments.cash.revenue || 0) / d.guestPayments.total.revenue) * 100}%` }} />
+                <div className="bg-[#6366F1]" style={{ width: `${((d.guestPayments.upi.revenue || 0) / d.guestPayments.total.revenue) * 100}%` }} />
+              </div>
+            </div>
+          )}
+        </Card>
+
         <Card title="Customer Consumption & Frequent Visitors">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

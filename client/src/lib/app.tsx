@@ -1,20 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, setToken, getToken } from './api';
 
-export type Role = 'admin' | 'member' | 'bartender' | 'customer';
-export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; must_change_pin?: number }
+export type Role = 'admin' | 'member' | 'bartender' | 'customer' | 'guest';
+export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; must_change_pin?: number }
 export interface Settings { bar_name: string; currency: string; logo: string; background: string; theme: string; accent: string; peg_sizes: string; approval_hours: string; bar_address?: string; bar_phone?: string; lan?: string[]; port?: number }
 
 interface Ctx {
   user: User | null; ready: boolean; settings: Settings;
-  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin') => Promise<User>; logout: () => void;
+  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest') => Promise<User>; logout: () => void;
   reloadSettings: () => Promise<void>; dark: boolean; toggleDark: () => void;
   toast: (text: string, type?: 'ok' | 'error') => void; money: (n: number) => string;
 }
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
 
-const DEFAULTS: Settings = { bar_name: "DIVINA OFFICERS's BAR", currency: '₹', logo: '/Login_logo.png', background: '/Login_bg.png', theme: 'dark', accent: '#f59e0b', peg_sizes: '30,60,90', approval_hours: '24' };
+const DEFAULTS: Settings = { bar_name: "DIVINA OFFICERS' BAR", currency: '₹', logo: '/Login_logo.png', background: '/Login_bg.webp', theme: 'dark', accent: '#f59e0b', peg_sizes: '30,60', approval_hours: '24' };
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -54,7 +54,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); }, [dark]);
   useEffect(() => { document.documentElement.style.setProperty('--accent', settings.accent || '#f59e0b'); document.title = `${settings.bar_name} · POS`; }, [settings]);
 
-  const login = async (service_no: string, pin?: string, mode?: 'member' | 'admin') => {
+  const login = async (service_no: string, pin?: string, mode?: 'member' | 'admin' | 'guest') => {
     const body = pin !== undefined ? { service_no, pin, mode } : { pin: service_no, mode };
     const r = await api<{ token: string; user: User }>('/auth/login', { method: 'POST', body });
     setToken(r.token);

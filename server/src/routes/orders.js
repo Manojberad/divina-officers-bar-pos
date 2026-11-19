@@ -16,7 +16,7 @@ r.get('/', requireAuth, (req, res) => {
   if (from) { where.push('o.created_at>=?'); p.push(new Date(`${from}T00:00:00`).toISOString()); }
   if (to) { where.push('o.created_at<?'); p.push(new Date(new Date(`${to}T00:00:00`).getTime() + 86400e3).toISOString()); }
   if (search) { where.push('(o.order_no LIKE ? OR u.name LIKE ? OR t.name LIKE ?)'); p.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-  const rows = q.all(`SELECT o.*, u.name customer_name, u.rank customer_rank, t.name table_name, cb.name created_by_name
+  const rows = q.all(`SELECT o.*, u.name customer_name, u.rank customer_rank, u.service_no customer_service_no, u.role customer_role, u.category customer_category, t.name table_name, cb.name created_by_name
     FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id LEFT JOIN users cb ON cb.id=o.created_by
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY o.id DESC LIMIT ?`, ...p, Number(limit));
   const items = rows.length ? q.all(`SELECT * FROM order_items WHERE order_id IN (${rows.map(() => '?').join(',')})`, ...rows.map((o) => o.id)) : [];
@@ -40,7 +40,7 @@ r.post('/', optionalAuth, (req, res) => {
 });
 
 r.post('/:id/status', requireAuth, (req, res) => {
-  res.json(transition(Number(req.params.id), req.body.status, req.user, req.body.note));
+  res.json(transition(Number(req.params.id), req.body.status, req.user, req.body.note, req.body.payment_mode, req.body.payment_ref));
 });
 
 r.post('/:id/approve', requireAuth, (req, res) => res.json(approve(Number(req.params.id), req.user, 'approve')));

@@ -12,8 +12,8 @@ interface Line { key: string; product_id: number; name: string; image?: string; 
 const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${ml || ''}`;
 
 export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void }) {
-  const { user, money, settings, toast } = useApp();
-  const staff = mode === 'staff';
+  const { user, money, toast } = useApp();
+  const staff = mode === 'staff' || (user != null && ['admin', 'bartender'].includes(user.role));
   const [products, setProducts] = useState<Product[]>(preload?.products || []);
   const [categories, setCategories] = useState<any[]>(preload?.categories || []);
   const [cat, setCat] = useState<number | 'fav' | null>(null);
@@ -25,7 +25,6 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   const [opts, setOpts] = useState({ user_id: '', table_id: '', notes: '', type: 'ondemand', scheduled_at: '' });
   const [busy, setBusy] = useState(false);
   const [showCart, setShowCart] = useState(false);
-  const pegSizes = (settings.peg_sizes || '30,60,90').split(',').map(Number).filter(Boolean);
 
   const load = () => {
     if (preload) return;
@@ -99,7 +98,15 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-bold text-[#1B2559] dark:text-[#E6EDF3]">{l.name}</div>
               <div className="mt-0.5 flex items-center gap-1 text-xs font-medium text-[#94A3B8]">
-                {l.serve_type === 'peg' ? `Peg ${l.peg_ml} ml` : l.serve_type === 'bottle' ? 'Full bottle' : 'Unit'} ·
+                {l.serve_type === 'peg'
+                  ? l.peg_ml === 30
+                    ? 'Small (30 ml)'
+                    : l.peg_ml === 60
+                      ? 'Large (60 ml)'
+                      : `Peg ${l.peg_ml} ml`
+                  : l.serve_type === 'bottle'
+                    ? 'Full Bottle (750 ml)'
+                    : 'Unit'} ·
                 {staff ? (
                   <input type="number" className="w-20 rounded-lg border border-[#E0E5F2] bg-white px-1.5 py-0.5 text-xs font-bold text-[#1B2559] dark:border-[#2E384D] dark:bg-[#151A25] dark:text-[#E6EDF3]" value={l.unit_price}
                     onChange={(e) => setCart((c) => c.map((x) => (x.key === l.key ? { ...x, unit_price: Number(e.target.value), custom_price: true } : x)))} />
@@ -120,7 +127,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
           <div className="grid grid-cols-2 gap-2">
             <Select value={opts.user_id} onChange={(e) => setOpts({ ...opts, user_id: e.target.value })}>
               <option value="">Walk-in / no member</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.rank ? `${c.rank} ` : ''}{c.name} ({c.service_no})</option>)}
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.rank ? `${c.rank} ` : ''}{c.name} ({c.service_no}){c.role === 'guest' ? ' [Guest]' : ''}</option>)}
             </Select>
             <Select value={opts.table_id} onChange={(e) => setOpts({ ...opts, table_id: e.target.value })}>
               <option value="">No table</option>
@@ -200,10 +207,12 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
               <div className="mt-3 px-0.5">
                 <div className="truncate text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{p.name}</div>
                 <div className="mt-0.5 truncate text-xs font-medium text-[#94A3B8]">
-                  {p.is_peg ? `${p.size_ml} ml · peg ${money(p.peg_price)}/30ml` : p.description || p.category}
+                  {p.is_peg ? `Small (30 ml) ${money(p.peg_price)} · Large (60 ml) ${money(p.peg_price * 2)}` : p.description || p.category}
                 </div>
                 <div className="mt-2.5 flex items-center justify-between">
-                  <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(p.selling_price)}</span>
+                  <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                    {p.is_peg && !staff ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
+                  </span>
                   {p.stock_status ? <StockDot s={p.stock_status} label={`${p.stock_display}`} /> : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
                 </div>
               </div>
@@ -236,34 +245,37 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
       )}
 
       <Modal open={!!picker} onClose={() => setPicker(null)} title={picker?.name || ''}>
-        {picker && <ServePicker p={picker} pegSizes={pegSizes} onPick={(s, ml) => add(picker, s, ml)} money={money} />}
+        {picker && <ServePicker p={picker} canIssueBottle={staff} onPick={(s, ml) => add(picker, s, ml)} money={money} />}
       </Modal>
     </div>
   );
 }
 
-function ServePicker({ p, pegSizes, onPick, money }: { p: Product; pegSizes: number[]; onPick: (s: Line['serve_type'], ml?: number) => void; money: (n: number) => string }) {
-  const [custom, setCustom] = useState('');
+function ServePicker({ p, canIssueBottle, onPick, money }: { p: Product; canIssueBottle: boolean; onPick: (s: Line['serve_type'], ml?: number) => void; money: (n: number) => string }) {
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {pegSizes.map((ml) => (
-          <Button key={ml} variant="subtle" size="lg" className="flex-col !gap-0.5" onClick={() => onPick('peg', ml)}>
-            <span>Peg {ml} ml</span>
-            <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(Math.round((p.peg_price * ml) / 30 * 100) / 100)}</span>
-          </Button>
-        ))}
-        <Button size="lg" className="flex-col !gap-0.5" onClick={() => onPick('bottle')}>
-          <span>Full Bottle</span>
-          <span className="text-sm">{money(p.selling_price)}</span>
+    <div className="space-y-3">
+      <div className={cx('grid gap-3', canIssueBottle ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2')}>
+        <Button variant="subtle" size="lg" className="flex-col !gap-1 !py-5" onClick={() => onPick('peg', 30)}>
+          <span className="text-base font-extrabold">Small</span>
+          <span className="text-xs font-semibold text-[#94A3B8]">30 ml</span>
+          <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(p.peg_price)}</span>
         </Button>
+        <Button variant="subtle" size="lg" className="flex-col !gap-1 !py-5" onClick={() => onPick('peg', 60)}>
+          <span className="text-base font-extrabold">Large</span>
+          <span className="text-xs font-semibold text-[#94A3B8]">60 ml</span>
+          <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(Math.round(p.peg_price * 2 * 100) / 100)}</span>
+        </Button>
+        {canIssueBottle && (
+          <Button size="lg" className="flex-col !gap-1 !py-5" onClick={() => onPick('bottle')}>
+            <span className="text-base font-extrabold">Full Bottle</span>
+            <span className="text-xs opacity-80">{p.size_ml || 750} ml</span>
+            <span className="text-sm font-extrabold">{money(p.selling_price)}</span>
+          </Button>
+        )}
       </div>
-      <Field label="Custom peg size (ml)">
-        <div className="flex gap-2">
-          <Input type="number" min={5} value={custom} onChange={(e) => setCustom(e.target.value)} />
-          <Button disabled={!Number(custom)} onClick={() => onPick('peg', Number(custom))}>Add</Button>
-        </div>
-      </Field>
+      {!canIssueBottle && (
+        <p className="text-center text-xs text-[#94A3B8]">Full bottles ({p.size_ml || 750} ml) can only be issued by the Bartender or Admin.</p>
+      )}
     </div>
   );
 }

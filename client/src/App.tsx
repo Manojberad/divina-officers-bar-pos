@@ -36,7 +36,7 @@ export default function App() {
         <Route path="/" element={<Navigate to={homeFor(user?.role)} replace />} />
         <Route path="/pos" element={<Guard roles={['admin', 'bartender']}><POS mode="staff" /></Guard>} />
         <Route path="/orders" element={<Guard roles={['admin', 'bartender']}><OrdersBoard /></Guard>} />
-        <Route path="/order" element={<Guard roles={['member', 'customer']}><POS mode="self" /></Guard>} />
+        <Route path="/order" element={<Guard roles={['member', 'customer', 'guest']}><POS mode="self" /></Guard>} />
         <Route path="/my-orders" element={<MyOrders />} />
         <Route path="/account" element={<Account />} />
         <Route path="/dashboard" element={<Guard roles={['admin']}><Dashboard /></Guard>} />

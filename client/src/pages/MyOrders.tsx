@@ -55,6 +55,7 @@ export default function MyOrders() {
             <div key={o.id} className="py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{o.order_no}</span><Badge s={o.status} />
+                {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge>}
                 {o.approval_status !== 'na' && <Badge s={o.approval_status}>{o.approval_status === 'expired' ? 'approval expired' : o.approval_status}</Badge>}
                 {o.type === 'prebooked' && <Badge s="accepted">pre-booked {fmtDate(o.scheduled_at)}</Badge>}
                 <span className="ml-auto font-semibold">{money(o.total)}</span>

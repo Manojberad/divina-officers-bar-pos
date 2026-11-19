@@ -131,6 +131,45 @@ const qrOrder = await req('/api/orders', { method: 'POST', token: memTok, body: 
 assert.equal(qrOrder.status, 201);
 assert.equal(qrOrder.data.table_id, tables[0].id);
 
+console.log('5b. Peg policy (Small 30ml & Large 60ml only; full bottle only for Bartender/Admin)…');
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 90, qty: 1 }] } })).status, 400, '90ml peg rejected');
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 403, 'Member blocked from issuing full bottle');
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }, { product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 1 }] } })).status, 201, 'Member allowed Small(30ml) & Large(60ml)');
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 201, 'Bartender allowed to issue full bottle');
+
+console.log('5c. Guest registration, bartender approval, admin notification & Cash/UPI checkout…');
+const gReg = await req('/api/auth/guest-register', { method: 'POST', body: { service_no: 'G-9001', rank: 'Wg Cdr', name: 'Guest Vikram', table_code: tables[0].code } });
+assert.equal(gReg.status, 201);
+assert.equal(gReg.data.status, 'pending');
+// Cannot login before bartender approves
+assert.equal((await req('/api/auth/login', { method: 'POST', body: { service_no: 'G-9001', pin: 'G-9001', mode: 'guest' } })).status, 403, 'Unapproved guest blocked');
+// Bartender sees request & approves
+const pendingReqs = (await req('/api/users/guest-requests?status=pending', { token: btTok })).data;
+assert(pendingReqs.some((g) => g.service_no === 'G-9001'), 'Bartender sees pending guest request');
+const gId = pendingReqs.find((g) => g.service_no === 'G-9001').id;
+const gAppr = await req(`/api/users/${gId}/approve-guest`, { method: 'POST', token: btTok, body: { action: 'approve' } });
+assert.equal(gAppr.status, 200);
+assert.equal(gAppr.data.approval_status, 'approved');
+const adminNotesAfterGuest = (await req('/api/admin/notifications', { token: adminTok })).data;
+assert(adminNotesAfterGuest.some((n) => n.message.includes('G-9001') && n.message.includes('approved')), 'Admin notified of guest approval');
+// Approved guest logs in & orders via QR
+const guestTok = await login('G-9001', 'G-9001');
+assert(guestTok, 'Approved guest logged in');
+assert.equal((await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 403, 'Guest blocked from full bottle');
+const gOrd1 = (await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, source: 'qr', items: [{ product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 1 }] } })).data;
+const gOrd2 = (await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, source: 'qr', items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }] } })).data;
+await req(`/api/orders/${gOrd1.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
+await req(`/api/orders/${gOrd2.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
+// Closing guest order without payment_mode fails
+assert.equal((await req(`/api/orders/${gOrd1.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed' } })).status, 400, 'Guest checkout requires Cash or UPI');
+// Closing with UPI & Cash succeeds
+const gCloseUpi = await req(`/api/orders/${gOrd1.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed', payment_mode: 'upi', payment_ref: 'UTR12345' } });
+assert.equal(gCloseUpi.status, 200);
+assert.equal(gCloseUpi.data.payment_mode, 'upi');
+const gCloseCash = await req(`/api/orders/${gOrd2.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed', payment_mode: 'cash' } });
+assert.equal(gCloseCash.status, 200);
+assert.equal(gCloseCash.data.payment_mode, 'cash');
+
 console.log('6. Inventory purchase, wastage, reconciliation & alerts…');
 await req('/api/inventory/movement', { method: 'POST', token: adminTok, body: { product_id: 1, type: 'purchase', qty: 2, unit_cost: 920, supplier: 'CSD Depot', invoice: 'INV-99' } });
 await req('/api/inventory/movement', { method: 'POST', token: btTok, body: { product_id: 1, type: 'wastage', ml: 30, note: 'Broken glass' } });
@@ -140,11 +179,12 @@ assert.equal(rec.data[0].diff, -0.5);
 const alerts = (await req('/api/inventory/alerts', { token: btTok })).data;
 assert(alerts.length > 0 && alerts.some((a) => a.stock_status === 'out'), 'Color-coded stock alerts returned');
 
-console.log('7. Dashboard & all 10 Reports (JSON + XLSX + PDF)…');
+console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 11 Reports (JSON + XLSX + PDF)…');
 const dash = (await req('/api/dashboard', { token: adminTok })).data;
 assert(dash.kpi.orders > 0 && dash.valuation.cost > 0);
+assert(dash.guestPayments.cash.revenue > 0 && dash.guestPayments.upi.revenue > 0, 'Dashboard tracks Guest Cash & UPI revenue');
 const types = (await req('/api/reports/types', { token: adminTok })).data;
-assert.equal(types.length, 10);
+assert.equal(types.length, 11);
 for (const t of types) {
   const j = await req(`/api/reports/${t.key}`, { token: adminTok });
   assert.equal(j.status, 200, `JSON report ${t.key}`);

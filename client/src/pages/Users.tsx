@@ -9,12 +9,14 @@ const CAT_LABEL: Record<string, string> = {
   POSTED: 'Posted-In Officer',
   TD: 'TD Officer',
   STAFF: 'Mess Staff',
+  GUEST: 'Guest',
 };
 
 const CAT_BADGE: Record<string, string> = {
   POSTED: 'accepted',
   TD: 'preparing',
   STAFF: 'placed',
+  GUEST: 'pending',
 };
 
 export default function Users() {
@@ -31,12 +33,20 @@ export default function Users() {
     e.preventDefault();
     const payload = {
       ...ed,
-      category: ed.role === 'bartender' ? 'STAFF' : ed.category,
+      category: ed.role === 'bartender' ? 'STAFF' : ed.role === 'guest' ? 'GUEST' : ed.category,
     };
     try {
       await api(ed.id ? `/users/${ed.id}` : '/users', { method: ed.id ? 'PUT' : 'POST', body: payload });
       toast('User saved');
       setEd(null);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const approveGuest = async (u: any, action: 'approve' | 'reject') => {
+    try {
+      await api(`/users/${u.id}/approve-guest`, { method: 'POST', body: { action } });
+      toast(action === 'approve' ? `Approved guest ${u.name}` : `Declined guest ${u.name}`);
       load();
     } catch (e: any) { toast(e.message, 'error'); }
   };
@@ -58,7 +68,9 @@ export default function Users() {
   const onRoleChange = (role: string) => {
     if (role === 'bartender') {
       setEd({ ...ed, role, category: 'STAFF', rank: ed.rank || 'Mess Staff' });
-    } else if (ed.category === 'STAFF') {
+    } else if (role === 'guest') {
+      setEd({ ...ed, role, category: 'GUEST' });
+    } else if (['STAFF', 'GUEST'].includes(ed.category)) {
       setEd({ ...ed, role, category: 'POSTED' });
     } else {
       setEd({ ...ed, role });
@@ -68,23 +80,49 @@ export default function Users() {
   const onCategoryChange = (category: string) => {
     if (category === 'STAFF') {
       setEd({ ...ed, category: 'STAFF', role: 'bartender', rank: ed.rank || 'Mess Staff' });
-    } else if (ed.role === 'bartender') {
+    } else if (category === 'GUEST') {
+      setEd({ ...ed, category: 'GUEST', role: 'guest' });
+    } else if (['bartender', 'guest'].includes(ed.role)) {
       setEd({ ...ed, category, role: category === 'TD' ? 'customer' : 'member' });
     } else {
       setEd({ ...ed, category });
     }
   };
 
+  const pendingGuests = users.filter((u) => u.role === 'guest' && u.approval_status === 'pending');
+  const memberCount = users.filter((u) => u.role !== 'guest').length;
+
   return (
     <div className="space-y-4 p-4">
+      {pendingGuests.length > 0 && (
+        <Card title={`🪪 Pending Guest Registrations (${pendingGuests.length})`} className="!border-[#FBBF24]">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {pendingGuests.map((g) => (
+              <div key={g.id} className="flex items-center justify-between gap-2 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
+                <div>
+                  <div className="font-bold">{g.rank} {g.name}</div>
+                  <div className="text-xs text-[#94A3B8]">Service No: <b>{g.service_no}</b></div>
+                </div>
+                <div className="flex gap-1.5">
+                  <Button size="sm" variant="success" onClick={() => approveGuest(g, 'approve')}>✔ Approve</Button>
+                  <Button size="sm" variant="danger" onClick={() => approveGuest(g, 'reject')}>✕</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       <Card
-        title={`Registered Users (${users.length} / 50)`}
+        title={`Registered Users (${memberCount} / 50 Officers & Staff · ${users.length - memberCount} Guests)`}
         actions={
           <div className="flex flex-wrap gap-2">
             <label className="cursor-pointer rounded-2xl bg-[#F4F7FE] px-3.5 py-2.5 text-sm font-bold text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3]">
               📥 Import Excel (Posted-In)
               <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => importXlsx(e.target.files?.[0])} />
             </label>
+            <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'GUEST', role: 'guest' })}>
+              + Add Guest
+            </Button>
             <Button variant="subtle" onClick={() => setEd({ ...BLANK, category: 'STAFF', role: 'bartender', rank: 'Mess Staff' })}>
               + Add Mess Staff (Bartender)
             </Button>
@@ -113,8 +151,9 @@ export default function Users() {
                   <td className="capitalize">{u.role}</td>
                   <td>{u.mobile || '—'}</td>
                   <td>{u.email || '—'}</td>
-                  <td>{u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}</td>
+                  <td>{u.approval_status === 'pending' ? <Badge s="pending">pending approval</Badge> : u.approval_status === 'rejected' ? <Badge s="cancelled">declined</Badge> : u.active ? <Badge s="approved">active</Badge> : <Badge s="cancelled">inactive</Badge>}</td>
                   <td className="space-x-1 text-right">
+                    {u.role === 'guest' && u.approval_status === 'pending' && <Button size="sm" variant="success" onClick={() => approveGuest(u, 'approve')}>Approve</Button>}
                     <Button size="sm" variant="subtle" onClick={() => setEd(u)}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => { setPinModal(u); setNewPin(''); }}>PIN</Button>
                     <Button size="sm" variant="ghost" onClick={async () => { if (confirm('Remove user?')) { await api(`/users/${u.id}`, { method: 'DELETE' }); load(); } }}>✕</Button>
@@ -146,6 +185,7 @@ export default function Users() {
               <Select value={ed.role} onChange={(e) => onRoleChange(e.target.value)}>
                 <option value="member">Bar Member</option>
                 <option value="customer">Customer / User</option>
+                <option value="guest">Guest</option>
                 <option value="bartender">Bartender</option>
                 <option value="admin">Admin</option>
               </Select>
@@ -155,15 +195,20 @@ export default function Users() {
                 <Select value="STAFF" disabled>
                   <option value="STAFF">Mess Staff</option>
                 </Select>
+              ) : ed.role === 'guest' ? (
+                <Select value="GUEST" disabled>
+                  <option value="GUEST">Guest</option>
+                </Select>
               ) : (
                 <Select value={ed.category} onChange={(e) => onCategoryChange(e.target.value)}>
                   <option value="POSTED">Posted-In Officer</option>
                   <option value="TD">TD Officer</option>
                   <option value="STAFF">Mess Staff</option>
+                  <option value="GUEST">Guest</option>
                 </Select>
               )}
             </Field>
-            {!ed.id && (ed.category === 'TD' || ed.category === 'STAFF') && (
+            {!ed.id && (ed.category === 'TD' || ed.category === 'STAFF' || ed.category === 'GUEST') && (
               <Field label={`Initial PIN (blank = ${ed.category === 'STAFF' ? 'Staff ID' : 'Service No'})`}>
                 <Input value={ed.pin || ''} onChange={(e) => setEd({ ...ed, pin: e.target.value })} />
               </Field>

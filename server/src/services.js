@@ -69,30 +69,36 @@ export function moveStock({ productId, type, qty, unitCost = null, supplier = nu
 /* ---------------- Orders ---------------- */
 export const FLOW = ['draft', 'placed', 'accepted', 'preparing', 'served', 'closed'];
 const STAFF = ['admin', 'bartender'];
+const ALLOWED_PEGS = [30, 60];
 
-export function priceItem(p, item, settings, allowOverride) {
+export function priceItem(p, item, _settings, isStaff) {
   const qty = Number(item.qty);
   if (!(qty > 0)) throw new HttpError(400, 'Quantity must be positive');
-  let serve = item.serve_type || (p.is_peg ? 'bottle' : 'unit');
+  let serve = item.serve_type || (p.is_peg ? (isStaff ? 'bottle' : 'peg') : 'unit');
   let pegMl = null, unitPrice, base;
   if (serve === 'peg') {
     if (!p.is_peg) throw new HttpError(400, `${p.name} cannot be served by peg`);
-    pegMl = Number(item.peg_ml || settings.peg_sizes.split(',')[0] || 30);
-    if (!(pegMl > 0)) throw new HttpError(400, 'Invalid peg size');
+    pegMl = Number(item.peg_ml || 30);
+    if (!ALLOWED_PEGS.includes(pegMl)) throw new HttpError(400, 'Only Small (30 ml) and Large (60 ml) pegs are allowed');
     unitPrice = Math.round((p.peg_price * pegMl) / 30 * 100) / 100;
     base = qty * pegMl;
   } else {
-    if (!p.is_peg) serve = 'unit';
+    if (p.is_peg) {
+      if (!isStaff) throw new HttpError(403, 'Only Bartender or Admin can issue a full bottle');
+      serve = 'bottle';
+    } else {
+      serve = 'unit';
+    }
     unitPrice = p.selling_price;
     base = p.is_peg ? qty * p.size_ml : qty;
   }
-  if (allowOverride && item.unit_price != null && item.unit_price !== '' && Number(item.unit_price) >= 0) unitPrice = Number(item.unit_price);
+  if (isStaff && item.unit_price != null && item.unit_price !== '' && Number(item.unit_price) >= 0) unitPrice = Number(item.unit_price);
   return { product_id: p.id, name: p.name, serve_type: serve, peg_ml: pegMl, qty, unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100, base_qty: base };
 }
 
 export function loadOrder(id) {
   const o = q.get(`SELECT o.*, u.name customer_name, u.service_no customer_service_no, u.rank customer_rank,
-      t.name table_name, cb.name created_by_name
+      u.role customer_role, u.category customer_category, t.name table_name, cb.name created_by_name
     FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id
     LEFT JOIN users cb ON cb.id=o.created_by WHERE o.id=?`, id);
   if (!o) return null;
@@ -118,7 +124,7 @@ export function createOrder(body, user) {
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, 'Order has no items');
   let userId = user?.id ?? null;
   if (isStaff) userId = body.user_id ? Number(body.user_id) : null;
-  if (userId && !q.get('SELECT id FROM users WHERE id=? AND active=1', userId)) throw new HttpError(400, 'Unknown customer');
+  if (userId && !q.get("SELECT id FROM users WHERE id=? AND active=1 AND approval_status='approved'", userId)) throw new HttpError(400, 'Unknown or unapproved customer');
   let tableId = body.table_id ? Number(body.table_id) : null;
   if (body.table_code) {
     const t = q.get('SELECT id FROM tables WHERE code=? AND active=1', body.table_code);
@@ -128,7 +134,7 @@ export function createOrder(body, user) {
   const type = body.type === 'prebooked' ? 'prebooked' : 'ondemand';
   if (type === 'prebooked') {
     if (!body.scheduled_at || isNaN(Date.parse(body.scheduled_at))) throw new HttpError(400, 'Pre-booked orders need a valid date/time');
-    if (user?.role === 'customer') throw new HttpError(403, 'Only members can pre-book orders');
+    if (['customer', 'guest'].includes(user?.role)) throw new HttpError(403, 'Only members can pre-book orders');
   }
   const status = body.status === 'draft' ? 'draft' : 'placed';
 
@@ -183,7 +189,7 @@ function reverse(order, userId) {
   q.run('UPDATE orders SET stock_deducted=0 WHERE id=?', order.id);
 }
 
-export function transition(orderId, to, user, note) {
+export function transition(orderId, to, user, note, paymentMode = null, paymentRef = null) {
   const settings = getSettings();
   const result = tx(() => {
     const o = loadOrder(orderId);
@@ -191,6 +197,8 @@ export function transition(orderId, to, user, note) {
     const from = o.status;
     const isStaff = STAFF.includes(user.role);
     const isOwner = o.user_id === user.id;
+    const normPay = paymentMode ? String(paymentMode).toLowerCase() : null;
+    if (normPay && !['cash', 'upi'].includes(normPay)) throw new HttpError(400, 'Payment mode must be Cash or UPI');
     if (from === to) return o;
 
     if (to === 'cancelled') {
@@ -206,6 +214,11 @@ export function transition(orderId, to, user, note) {
         if (fi < 0 || ti <= fi) throw new HttpError(409, `Invalid transition ${from} → ${to}`);
         if (!isStaff && !(isOwner && from === 'draft' && to === 'placed')) throw new HttpError(403, 'Not allowed');
       }
+      if (to === 'closed' && from !== 'disputed' && o.customer_role === 'guest') {
+        if (!normPay && !o.payment_mode) {
+          throw new HttpError(400, 'Select payment mode (Cash or UPI) to checkout a Guest order');
+        }
+      }
       const deductIdx = FLOW.indexOf(settings.deduct_on === 'accepted' ? 'accepted' : 'served');
       if (ti >= deductIdx) deduct(o, user.id);
     } else throw new HttpError(400, 'Unknown status');
@@ -213,12 +226,22 @@ export function transition(orderId, to, user, note) {
     const t = now();
     const sets = ['status=?', 'updated_at=?'];
     const vals = [to, t];
+    let eventNote = note || null;
+    if (normPay) {
+      sets.push('payment_mode=?', 'payment_ref=?');
+      vals.push(normPay, paymentRef ? String(paymentRef).trim() : null);
+      const payLabel = `Paid via ${normPay.toUpperCase()}${paymentRef ? ` (${String(paymentRef).trim()})` : ''}`;
+      eventNote = eventNote ? `${eventNote} · ${payLabel}` : payLabel;
+    }
     if (to === 'closed') {
       if (from === 'disputed') { sets.push("approval_status='approved'", 'resolution_note=?', 'approval_at=?'); vals.push(note || 'Resolved by admin', t); }
       else { sets.push('closed_at=?', 'approval_status=?'); vals.push(t, o.user_id ? 'pending' : 'na'); }
     }
     q.run(`UPDATE orders SET ${sets.join(', ')} WHERE id=?`, ...vals, orderId);
-    q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', orderId, from, to, user.id, note || null, t);
+    q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', orderId, from, to, user.id, eventNote, t);
+    if (to === 'closed' && o.customer_role === 'guest') {
+      audit(user.id, 'order.guest_checkout', 'order', orderId, { payment_mode: normPay || o.payment_mode, payment_ref: paymentRef || null, total: o.total });
+    }
     if (to === 'cancelled') audit(user.id, 'order.cancel', 'order', orderId, { from, note });
     if (from === 'disputed') audit(user.id, 'order.dispute_resolved', 'order', orderId, { note });
     return loadOrder(orderId);

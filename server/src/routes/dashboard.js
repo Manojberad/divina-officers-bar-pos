@@ -69,13 +69,31 @@ r.get('/', requireRole('admin'), (req, res) => {
     disputed: q.get("SELECT COUNT(*) n FROM orders WHERE status='disputed'").n,
     awaiting_approval: q.get("SELECT COUNT(*) n FROM orders WHERE approval_status='pending'").n,
     prebooked: q.get("SELECT COUNT(*) n FROM orders WHERE type='prebooked' AND status IN ('placed','accepted') AND scheduled_at>=?", tIso).n,
+    guest_requests: q.get("SELECT COUNT(*) n FROM users WHERE role='guest' AND approval_status='pending'").n,
+  };
+
+  const gpRows = q.all(`SELECT
+      CASE WHEN o.payment_mode IN ('cash','upi') THEN o.payment_mode ELSE 'member_bill' END mode,
+      COUNT(*) orders, COALESCE(SUM(o.total),0) revenue
+    FROM orders o LEFT JOIN users u ON u.id=o.user_id
+    WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<?
+    GROUP BY mode`, F, T);
+  const byMode = Object.fromEntries(gpRows.map((x) => [x.mode, { orders: x.orders, revenue: round(x.revenue) }]));
+  const guestCash = byMode.cash || { orders: 0, revenue: 0 };
+  const guestUpi = byMode.upi || { orders: 0, revenue: 0 };
+  const memberBill = byMode.member_bill || { orders: 0, revenue: 0 };
+  const guestPayments = {
+    cash: guestCash,
+    upi: guestUpi,
+    total: { orders: guestCash.orders + guestUpi.orders, revenue: round(guestCash.revenue + guestUpi.revenue) },
+    memberBill,
   };
 
   res.json({
     today: sum(tIso, end), week: sum(weekStart, end), month: sum(monthStart, end),
     kpi: { revenue: round(kpi.revenue), orders: kpi.orders, avg: round(kpi.avg), drinks }, statusCounts,
     daily, weekly, monthly, topProducts, categories, customers, visitors, valuation, alerts,
-    purchaseVsConsumption, losses: Object.fromEntries(Object.entries(losses).map(([k, v]) => [k, round(v)])), discrepancies, pending,
+    purchaseVsConsumption, losses: Object.fromEntries(Object.entries(losses).map(([k, v]) => [k, round(v)])), discrepancies, pending, guestPayments,
   });
 });
 

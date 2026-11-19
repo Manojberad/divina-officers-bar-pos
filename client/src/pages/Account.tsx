@@ -22,7 +22,7 @@ export default function Account() {
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div><span className="text-gray-500">Name:</span> <b>{user?.rank} {user?.name}</b></div>
           <div><span className="text-gray-500">Service No:</span> <b>{user?.service_no}</b></div>
-          <div><span className="text-gray-500">Category:</span> <b>{user?.category === 'STAFF' ? 'Mess Staff' : user?.category === 'POSTED' ? 'Posted-In Officer' : user?.category === 'TD' ? 'TD Officer' : user?.category}</b></div>
+          <div><span className="text-gray-500">Category:</span> <b>{user?.category === 'STAFF' ? 'Mess Staff' : user?.category === 'GUEST' ? 'Guest' : user?.category === 'POSTED' ? 'Posted-In Officer' : user?.category === 'TD' ? 'TD Officer' : user?.category}</b></div>
           <div><span className="text-gray-500">Role:</span> <b className="capitalize">{user?.role}</b></div>
         </div>
       </Card>

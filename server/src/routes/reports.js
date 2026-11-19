@@ -41,7 +41,12 @@ export const REPORTS = {
     title: 'Product-wise Sales',
     build: (F, T) => ({
       columns: [C('name', 'Product'), C('category', 'Category'), C('serve', 'Serve'), C('qty', 'Qty', 'num'), C('volume', 'Volume (ml)', 'num'), C('revenue', 'Revenue', 'money')],
-      rows: q.all(`SELECT i.product_id _id, i.name, c.name category, CASE WHEN i.serve_type='peg' THEN 'Peg ' || CAST(i.peg_ml AS INT) || 'ml' ELSE i.serve_type END serve,
+      rows: q.all(`SELECT i.product_id _id, i.name, c.name category,
+          CASE WHEN i.serve_type='peg' AND i.peg_ml=30 THEN 'Small (30 ml)'
+               WHEN i.serve_type='peg' AND i.peg_ml=60 THEN 'Large (60 ml)'
+               WHEN i.serve_type='peg' THEN 'Peg ' || CAST(i.peg_ml AS INT) || 'ml'
+               WHEN i.serve_type='bottle' THEN 'Full Bottle'
+               ELSE i.serve_type END serve,
           SUM(i.qty) qty, SUM(CASE WHEN p.is_peg=1 THEN i.base_qty ELSE 0 END) volume, SUM(i.line_total) revenue
         FROM order_items i JOIN orders o ON o.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN categories c ON c.id=p.category_id
         WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? GROUP BY i.product_id, serve ORDER BY revenue DESC`, F, T).map((x) => ({ ...x, revenue: round(x.revenue) })),
@@ -102,13 +107,33 @@ export const REPORTS = {
   transactions: {
     title: 'Complete Transaction History',
     build: (F, T) => ({
-      columns: [C('order_no', 'Order'), C('created', 'Date'), C('customer', 'Customer'), C('table', 'Table'), C('type', 'Type'), C('items', 'Items'), C('status', 'Status'), C('approval', 'Approval'), C('total', 'Total', 'money'), C('by', 'Created By')],
-      rows: q.all(`SELECT o.id _id, o.order_no, o.created_at, u.name customer, t.name tbl, o.type, o.status, o.approval_status, o.total, cb.name by_name,
-          (SELECT GROUP_CONCAT(i.qty || ' x ' || i.name || CASE WHEN i.serve_type='peg' THEN ' (' || CAST(i.peg_ml AS INT) || 'ml)' ELSE '' END, '; ') FROM order_items i WHERE i.order_id=o.id) items
+      columns: [C('order_no', 'Order'), C('created', 'Date'), C('customer', 'Customer'), C('role', 'Role'), C('table', 'Table'), C('items', 'Items'), C('status', 'Status'), C('payment', 'Payment'), C('approval', 'Approval'), C('total', 'Total', 'money'), C('by', 'Created By')],
+      rows: q.all(`SELECT o.id _id, o.order_no, o.created_at, u.name customer, u.role customer_role, t.name tbl, o.type, o.status, o.payment_mode, o.payment_ref, o.approval_status, o.total, cb.name by_name,
+          (SELECT GROUP_CONCAT(i.qty || ' x ' || i.name || CASE WHEN i.serve_type='peg' AND i.peg_ml=30 THEN ' (Small 30ml)' WHEN i.serve_type='peg' AND i.peg_ml=60 THEN ' (Large 60ml)' WHEN i.serve_type='peg' THEN ' (' || CAST(i.peg_ml AS INT) || 'ml)' ELSE '' END, '; ') FROM order_items i WHERE i.order_id=o.id) items
           FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id LEFT JOIN users cb ON cb.id=o.created_by
           WHERE o.created_at>=? AND o.created_at<? ORDER BY o.id`, F, T)
-        .map((x) => ({ _id: x._id, order_no: x.order_no, created: local(x.created_at), customer: x.customer || 'Walk-in', table: x.tbl || '', type: x.type, items: x.items, status: x.status, approval: x.approval_status, total: x.status === 'cancelled' ? 0 : x.total, by: x.by_name })),
+        .map((x) => ({
+          _id: x._id, order_no: x.order_no, created: local(x.created_at), customer: x.customer || 'Walk-in', role: x.customer_role || 'walk-in', table: x.tbl || '',
+          items: x.items, status: x.status, payment: x.payment_mode ? `${x.payment_mode.toUpperCase()}${x.payment_ref ? ` (${x.payment_ref})` : ''}` : 'Member Bill',
+          approval: x.approval_status, total: x.status === 'cancelled' ? 0 : x.total, by: x.by_name,
+        })),
       sum: ['total'],
+    }),
+  },
+  guest_payments: {
+    title: 'Guest Payment Register (Cash & UPI)',
+    build: (F, T) => ({
+      columns: [C('order_no', 'Order'), C('closed', 'Checkout Date'), C('guest', 'Guest Name'), C('rank', 'Rank'), C('service_no', 'Service No'), C('table', 'Table'), C('items', 'Items'), C('payment_mode', 'Payment Mode'), C('payment_ref', 'Ref / Note'), C('cash_amt', 'Cash', 'money'), C('upi_amt', 'UPI', 'money'), C('total', 'Total', 'money')],
+      rows: q.all(`SELECT o.id _id, o.order_no, COALESCE(o.closed_at, o.created_at) closed, u.name guest, u.rank, u.service_no, t.name tbl, o.payment_mode, o.payment_ref, o.total,
+          (SELECT GROUP_CONCAT(i.qty || ' x ' || i.name || CASE WHEN i.serve_type='peg' AND i.peg_ml=30 THEN ' (Small 30ml)' WHEN i.serve_type='peg' AND i.peg_ml=60 THEN ' (Large 60ml)' ELSE '' END, '; ') FROM order_items i WHERE i.order_id=o.id) items
+          FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id
+          WHERE (u.role='guest' OR o.payment_mode IN ('cash','upi')) AND o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? ORDER BY o.id`, F, T)
+        .map((x) => ({
+          _id: x._id, order_no: x.order_no, closed: local(x.closed), guest: x.guest || 'Walk-in Guest', rank: x.rank || '', service_no: x.service_no || '',
+          table: x.tbl || '', items: x.items, payment_mode: x.payment_mode ? x.payment_mode.toUpperCase() : 'UNRECORDED', payment_ref: x.payment_ref || '',
+          cash_amt: x.payment_mode === 'cash' ? round(x.total) : 0, upi_amt: x.payment_mode === 'upi' ? round(x.total) : 0, total: round(x.total),
+        })),
+      sum: ['cash_amt', 'upi_amt', 'total'],
     }),
   },
 };

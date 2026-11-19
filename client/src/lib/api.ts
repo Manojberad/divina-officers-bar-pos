@@ -144,6 +144,6 @@ export async function download(path: string, filename: string) {
 export function subscribe(handler: (event: string, data: any) => void) {
   const t = getToken();
   const es = new EventSource(`/api/events${t ? `?token=${encodeURIComponent(t)}` : ''}`);
-  ['order', 'notification', 'settings'].forEach((ev) => es.addEventListener(ev, (e: any) => handler(ev, JSON.parse(e.data || '{}'))));
+  ['order', 'notification', 'settings', 'guest_request'].forEach((ev) => es.addEventListener(ev, (e: any) => handler(ev, JSON.parse(e.data || '{}'))));
   return () => es.close();
 }
