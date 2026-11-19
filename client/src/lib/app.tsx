@@ -12,7 +12,7 @@ export interface Settings {
 
 interface Ctx {
   user: User | null; ready: boolean; settings: Settings;
-  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest') => Promise<User>; logout: () => void;
+  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest', remember?: boolean) => Promise<User>; logout: () => void;
   reloadUser: () => Promise<void>;
   reloadSettings: () => Promise<void>; dark: boolean; toggleDark: () => void;
   toast: (text: string, type?: 'ok' | 'error') => void; money: (n: number) => string;
@@ -72,13 +72,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); }, [dark]);
   useEffect(() => { document.documentElement.style.setProperty('--accent', settings.accent || '#f59e0b'); document.title = `${settings.bar_name} · POS`; }, [settings]);
 
-  const login = async (service_no: string, pin?: string, mode?: 'member' | 'admin' | 'guest') => {
-    const body = pin !== undefined ? { service_no, pin, mode } : { pin: service_no, mode };
+  const login = async (service_no: string, pin?: string, mode?: 'member' | 'admin' | 'guest', remember = true) => {
+    const body = pin !== undefined ? { service_no, pin, mode, remember } : { pin: service_no, mode, remember };
     const r = await api<{ token: string; user: User }>('/auth/login', { method: 'POST', body });
     setToken(r.token);
     localStorage.setItem('user', JSON.stringify(r.user));
     setUser(r.user);
     reloadUser();
+    // Prompt Android Chrome / compatible browsers to save credentials to Password Manager
+    try {
+      const w = window as any;
+      if (remember && pin && w.PasswordCredential && navigator.credentials?.store) {
+        const cred = new w.PasswordCredential({
+          id: r.user.service_no || service_no,
+          password: pin,
+          name: `${r.user.rank ? `${r.user.rank} ` : ''}${r.user.name}`,
+        });
+        navigator.credentials.store(cred).catch(() => {});
+      }
+    } catch { /* ignore on unsupported browsers */ }
     return r.user;
   };
   const logout = () => { setToken(null); localStorage.removeItem('user'); setUser(null); };

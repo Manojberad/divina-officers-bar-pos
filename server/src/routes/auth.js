@@ -66,7 +66,8 @@ r.post('/login', (req, res) => {
   attempts.delete(key);
   audit(u.id, 'auth.login', 'user', u.id);
   const { pin_hash, ...user } = u;
-  res.json({ token: signToken({ uid: u.id, role: u.role }), user });
+  const hours = req.body?.remember ? 24 * 7 : 12;
+  res.json({ token: signToken({ uid: u.id, role: u.role }, hours), user });
 });
 
 // Guest self-registration (via QR menu or login page) -> requires bartender approval, notifies admin

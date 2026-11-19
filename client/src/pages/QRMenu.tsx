@@ -174,12 +174,12 @@ export default function QRMenu() {
         </div>
 
         {authTab === 'login' ? (
-          <form onSubmit={signIn} className="space-y-3">
+          <form onSubmit={signIn} method="post" autoComplete="on" className="space-y-3">
             <Field label="Service Number">
-              <Input placeholder="Enter Service No." value={sn} onChange={(e) => setSn(e.target.value)} required autoFocus autoCapitalize="characters" />
+              <Input id="qr-username" name="username" autoComplete="username" placeholder="Enter Service No." value={sn} onChange={(e) => setSn(e.target.value)} required autoFocus autoCapitalize="characters" />
             </Field>
             <Field label="PIN">
-              <Input placeholder="Enter your PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} required />
+              <Input id="qr-password" name="password" autoComplete="current-password" placeholder="Enter your PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} required />
             </Field>
             {lerr && <div className="rounded-xl bg-red-500/15 p-2.5 text-sm font-medium text-red-500">{lerr}</div>}
             <Button className="w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign In'}</Button>

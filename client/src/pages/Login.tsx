@@ -9,9 +9,14 @@ export default function Login() {
   const nav = useNavigate();
   const loc = useLocation() as any;
 
-  const [mode, setMode] = useState<'member' | 'admin'>('member');
-  const [sn, setSn] = useState('');
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem('bartill_saved_login') || 'null'); } catch { return null; }
+  })();
+
+  const [mode, setMode] = useState<'member' | 'admin'>(saved?.mode === 'admin' ? 'admin' : 'member');
+  const [sn, setSn] = useState<string>(saved?.sn || '');
   const [pin, setPin] = useState('');
+  const [remember, setRemember] = useState<boolean>(saved ? true : true);
   const [showPin, setShowPin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -58,7 +63,9 @@ export default function Login() {
     setBusy(true);
     setErr('');
     try {
-      const u = await login(sn.trim(), pin.trim(), mode);
+      const u = await login(sn.trim(), pin.trim(), mode, remember);
+      if (remember) localStorage.setItem('bartill_saved_login', JSON.stringify({ sn: sn.trim(), mode }));
+      else localStorage.removeItem('bartill_saved_login');
       if (u.must_change_pin) toast('Please change your initial PIN (Account page)');
       nav(loc.state?.from || homeFor(u.role), { replace: true });
     } catch (e: any) {
@@ -220,6 +227,8 @@ export default function Login() {
       <div className="relative z-10 flex w-full max-w-[490px] flex-col items-center px-5 py-5 md:mr-[5%] md:w-[42%] lg:mr-[6%]">
         <form
           onSubmit={submit}
+          method="post"
+          autoComplete="on"
           className={`login-panel w-full rounded-[28px] px-6 py-6 text-white sm:px-8 sm:py-7 ${shake ? 'anim-shake' : ''}`}
         >
           <div className="mb-3 flex justify-center">
@@ -278,10 +287,10 @@ export default function Login() {
             </button>
           </div>
 
-          {/* Interactive Input Fields */}
-          <div key={mode} className="anim-fade-up mt-5 space-y-4">
+          {/* Interactive Input Fields (stable DOM + semantic autocomplete for Android/iOS Password Manager) */}
+          <div className="anim-fade-up mt-5 space-y-4">
             <div className={`input-shell ${focusedField === 'sn' ? 'focused' : ''}`}>
-              <label className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
+              <label htmlFor="login-username" className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
                 <span>{mode === 'member' ? 'Member Service No.' : 'Admin / Staff ID'}</span>
                 {sn.trim().length > 0 && (
                   <span className="field-check text-[11px] font-bold text-[#ffd77b]">✓</span>
@@ -299,7 +308,10 @@ export default function Login() {
                   </svg>
                 </span>
                 <input
+                  id="login-username"
+                  name="username"
                   type="text"
+                  autoComplete="username"
                   placeholder={mode === 'member' ? 'Enter Service No. (e.g. IC-51234)' : 'Enter Admin / Staff ID (e.g. ADMIN)'}
                   value={sn}
                   onFocus={() => setFocusedField('sn')}
@@ -308,7 +320,7 @@ export default function Login() {
                     setSn(e.target.value);
                     if (err) setErr('');
                   }}
-                  autoFocus
+                  autoFocus={!sn}
                   autoCapitalize="characters"
                   required
                   className="gold-input h-12 w-full rounded-xl pl-10 pr-4 text-sm font-medium outline-none"
@@ -317,7 +329,7 @@ export default function Login() {
             </div>
 
             <div className={`input-shell ${focusedField === 'pin' ? 'focused' : ''}`}>
-              <label className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
+              <label htmlFor="login-password" className="mb-2 flex items-center justify-between text-sm font-semibold tracking-wide text-[#f1dfbd]">
                 <span>{mode === 'member' ? 'Member PIN' : 'Admin PIN'}</span>
                 {pin.trim().length > 0 && (
                   <span className="field-check text-[11px] font-bold text-[#ffd77b]">✓</span>
@@ -335,7 +347,10 @@ export default function Login() {
                   </svg>
                 </span>
                 <input
+                  id="login-password"
+                  name="password"
                   type={showPin ? 'text' : 'password'}
+                  autoComplete="current-password"
                   placeholder="Enter your PIN"
                   value={pin}
                   onFocus={() => setFocusedField('pin')}
@@ -369,6 +384,19 @@ export default function Login() {
                 </button>
               </div>
             </div>
+
+            {/* Save login / Remember on this device */}
+            <label className="flex cursor-pointer items-center justify-between pt-0.5 text-xs text-[#e7d9bf]">
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#ffc65c]/50 accent-[#ffc34e]"
+                />
+                <span>Save login details &amp; stay signed in (7 days)</span>
+              </span>
+            </label>
           </div>
 
           {err && (
