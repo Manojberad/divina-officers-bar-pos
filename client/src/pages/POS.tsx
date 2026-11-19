@@ -138,8 +138,8 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         {(staff || user?.role === 'member') && mode !== 'qr' && (
           <div className="flex gap-2">
             <Select value={opts.type} onChange={(e) => setOpts({ ...opts, type: e.target.value })} className="!w-40">
-              <option value="ondemand">On-demand</option>
-              <option value="prebooked">Pre-book</option>
+              <option value="ondemand">Order Now</option>
+              <option value="prebooked">Pre-Order</option>
             </Select>
             {opts.type === 'prebooked' && <Input type="datetime-local" value={opts.scheduled_at} onChange={(e) => setOpts({ ...opts, scheduled_at: e.target.value })} />}
           </div>

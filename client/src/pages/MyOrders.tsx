@@ -57,7 +57,7 @@ export default function MyOrders() {
                 <span className="font-semibold">{o.order_no}</span><Badge s={o.status} />
                 {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge>}
                 {o.approval_status !== 'na' && <Badge s={o.approval_status}>{o.approval_status === 'expired' ? 'approval expired' : o.approval_status}</Badge>}
-                {o.type === 'prebooked' && <Badge s="accepted">pre-booked {fmtDate(o.scheduled_at)}</Badge>}
+                {o.type === 'prebooked' && <Badge s="accepted">Pre-Order {fmtDate(o.scheduled_at)}</Badge>}
                 <span className="ml-auto font-semibold">{money(o.total)}</span>
               </div>
               <div className="text-sm text-gray-500">{fmtDate(o.created_at)} {o.table_name && `· ${o.table_name}`} — {o.items.map(itemLabel).join(', ')}</div>

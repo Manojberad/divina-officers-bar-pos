@@ -112,7 +112,7 @@ export default function Dashboard() {
           )}
           {d.pending.prebooked > 0 && (
             <Link to="/orders" className="inline-flex items-center gap-2 rounded-2xl bg-[#6366F1] px-4 py-2.5 text-xs font-bold text-white shadow-md">
-              ⏰ {d.pending.prebooked} upcoming pre-booked order(s)
+              ⏰ {d.pending.prebooked} upcoming Pre-Order(s)
             </Link>
           )}
           {d.alerts.length > 0 && (

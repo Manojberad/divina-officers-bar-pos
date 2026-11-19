@@ -59,7 +59,7 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
             {isGuestOrder && <Badge s="placed">Guest</Badge>}
             {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Paid Cash' : '📱 Paid UPI'}</Badge>}
             {o.approval_status !== 'na' && <Badge s={o.approval_status}>approval: {o.approval_status}</Badge>}
-            {o.type === 'prebooked' && <Badge s="accepted">pre-booked {fmtDate(o.scheduled_at)}</Badge>}
+            {o.type === 'prebooked' && <Badge s="accepted">Pre-Order {fmtDate(o.scheduled_at)}</Badge>}
           </div>
           <div className="grid grid-cols-2 gap-1 text-[#707EAE] dark:text-[#94A3B8]">
             <span>Customer: <b className="text-[#1B2559] dark:text-[#E6EDF3]">{o.customer_rank ? `${o.customer_rank} ` : ''}{o.customer_name || 'Walk-in'}</b></span>
