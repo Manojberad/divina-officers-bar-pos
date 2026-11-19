@@ -152,6 +152,15 @@ const migrations = [
   ALTER TABLE users ADD COLUMN td_start_date TEXT;
   ALTER TABLE users ADD COLUMN td_end_date TEXT;
   `,
+  // v7 – Veg / Non-Veg classification for Kitchen products
+  `
+  ALTER TABLE products ADD COLUMN food_type TEXT CHECK(food_type IN ('veg','nonveg') OR food_type IS NULL);
+  UPDATE products SET food_type = 'nonveg'
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'From the Kitchen')
+      AND (lower(name) LIKE '%chicken%' OR lower(name) LIKE '%mutton%' OR lower(name) LIKE '%fish%' OR lower(name) LIKE '%egg%' OR lower(name) LIKE '%prawn%' OR lower(name) LIKE '%meat%' OR lower(name) LIKE '%lamb%');
+  UPDATE products SET food_type = 'veg'
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'From the Kitchen') AND food_type IS NULL;
+  `,
 ];
 
 export function migrate() {

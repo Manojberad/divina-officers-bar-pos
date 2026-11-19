@@ -210,7 +210,23 @@ assert.equal(
 // Reset member limit back to 0 (unlimited)
 await req('/api/admin/settings', { method: 'PUT', token: adminTok, body: { member_alcohol_limit: '0' } });
 
-console.log('6. Inventory purchase, wastage, reconciliation & alerts…');
+console.log('6. Inventory purchase, wastage, reconciliation, Excel product import & alerts…');
+const pTpl = await req('/api/products/template', { token: adminTok, raw: true });
+assert.equal(pTpl.status, 200, 'Products Excel template downloadable');
+const pwb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(pwb, XLSX.utils.json_to_sheet([
+  { Name: 'Paneer Tikka', Category: 'From the Kitchen', 'Food Type': 'Veg', Unit: 'plate', 'Is Peg': 'No', 'Purchase Price': 100, 'Selling Price': 220, 'Opening Stock': 10 },
+  { Name: 'Filter Coffee', Category: 'Hot Beverages', Unit: 'cup', 'Is Peg': 'No', 'Purchase Price': 20, 'Selling Price': 50, 'Opening Stock': 25 },
+]), 'Products');
+const pfd = new FormData();
+pfd.append('file', new Blob([XLSX.write(pwb, { type: 'buffer', bookType: 'xlsx' })]), 'products.xlsx');
+const pImp = await req('/api/products/import', { method: 'POST', token: adminTok, body: pfd });
+assert.equal(pImp.status, 200);
+assert.equal(pImp.data.created, 2, 'Imported 2 products from Excel');
+assert.equal(pImp.data.categories_created, 1, 'Auto-created new category from Excel');
+const allProds = (await req('/api/products?all=1', { token: adminTok })).data;
+assert.equal(allProds.find((p) => p.name === 'Paneer Tikka')?.food_type, 'veg', 'Veg food_type saved');
+assert.equal(allProds.find((p) => p.name === 'Chicken Tikka')?.food_type, 'nonveg', 'Non-Veg food_type saved');
 await req('/api/inventory/movement', { method: 'POST', token: adminTok, body: { product_id: 1, type: 'purchase', qty: 2, unit_cost: 920, supplier: 'CSD Depot', invoice: 'INV-99' } });
 await req('/api/inventory/movement', { method: 'POST', token: btTok, body: { product_id: 1, type: 'wastage', ml: 30, note: 'Broken glass' } });
 const curDisp = (await req('/api/products/1', { token: adminTok })).data.stock_display;

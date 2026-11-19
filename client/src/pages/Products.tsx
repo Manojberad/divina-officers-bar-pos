@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, download } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Button, Card, Field, Input, Modal, Select, StockDot } from '../components/ui';
 
-const BLANK = { name: '', category_id: '', brand: '', description: '', size_ml: 750, unit: 'bottle', is_peg: true, purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, min_stock: '', critical_stock: '', active: true };
+const BLANK = { name: '', category_id: '', brand: '', description: '', size_ml: 750, unit: 'bottle', is_peg: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, min_stock: '', critical_stock: '', active: true };
 
 export default function Products() {
   const { money, toast } = useApp();
@@ -34,6 +34,17 @@ export default function Products() {
     try { await api(catEd.id ? `/categories/${catEd.id}` : '/categories', { method: catEd.id ? 'PUT' : 'POST', body: catEd }); setCatEd(null); load(); } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const importXlsx = async (file?: File) => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const r = await api('/products/import', { method: 'POST', body: fd });
+      toast(`Imported: ${r.created} added, ${r.updated} updated${r.categories_created ? `, ${r.categories_created} new categories` : ''}${r.skipped?.length ? ` (${r.skipped.length} skipped)` : ''}`);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
   return (
     <div className="space-y-4 p-4">
       <Card title="Categories & default stock thresholds" actions={<Button size="sm" onClick={() => setCatEd({ name: '', low_threshold: 3, critical_threshold: 1 })}>+ Category</Button>}>
@@ -47,19 +58,41 @@ export default function Products() {
         </div>
       </Card>
 
-      <Card title={`Products (${products.length})`} actions={<Button onClick={() => { setFile(null); setEd({ ...BLANK, category_id: cats[0]?.id || '' }); }}>+ New Product</Button>}>
+      <Card
+        title={`Products (${products.length})`}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" size="sm" onClick={() => download('/products/template', 'products-categories-template.xlsx').catch((e) => toast(e.message, 'error'))}>
+              📄 Excel Template
+            </Button>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-[#F4F7FE] px-3.5 py-1.5 text-xs font-bold text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3]">
+              📥 Import Excel
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { importXlsx(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            <Button onClick={() => { setFile(null); setEd({ ...BLANK, category_id: cats[0]?.id || '' }); }}>+ New Product</Button>
+          </div>
+        }
+      >
+        <p className="mb-3 text-xs text-[#707EAE] dark:text-[#94A3B8]">
+          Import products &amp; categories in bulk from Excel (<code>.xlsx</code> / <code>.csv</code>). Missing categories are created automatically; include <code>Food Type</code> (<code>Veg</code> / <code>Non-Veg</code>) for kitchen items.
+        </p>
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>Category</th><th>Size / Unit</th><th>Peg</th><th>Purchase</th><th>Selling</th><th>Peg (30ml)</th><th>Stock</th><th>Thresholds</th><th /></tr></thead>
             <tbody>
               {products.map((p) => (
                 <tr key={p.id} className={`border-t dark:border-gray-700 ${!p.active ? 'opacity-50' : ''}`}>
-                  <td className="flex items-center gap-2 p-2 font-semibold">{p.image && <img src={p.image} className="h-9 w-9 rounded object-cover" alt="" />}{p.name}</td>
+                  <td className="flex items-center gap-2 p-2 font-semibold">
+                    {p.image && <img src={p.image} className="h-9 w-9 rounded object-cover" alt="" />}
+                    <span>{p.name}</span>
+                    {p.food_type === 'veg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-emerald-600" title="Veg"><span className="h-2 w-2 rounded-full bg-emerald-600" /></span>}
+                    {p.food_type === 'nonveg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-red-600" title="Non-Veg"><span className="h-2 w-2 rounded-full bg-red-600" /></span>}
+                  </td>
                   <td>{p.category}</td><td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td><td>{p.is_peg ? 'Yes' : 'No'}</td>
                   <td>{money(p.purchase_price)}</td><td>{money(p.selling_price)}</td><td>{p.is_peg ? money(p.peg_price) : '—'}</td>
                   <td><StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} /></td>
                   <td>{p.low_level} / {p.critical_level}</td>
-                  <td className="space-x-1 text-right"><Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, min_stock: p.min_stock ?? '', critical_stock: p.critical_stock ?? '' }); }}>Edit</Button><Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button></td>
+                  <td className="space-x-1 text-right"><Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, food_type: p.food_type ?? '', min_stock: p.min_stock ?? '', critical_stock: p.critical_stock ?? '' }); }}>Edit</Button><Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button></td>
                 </tr>
               ))}
             </tbody>
@@ -73,6 +106,13 @@ export default function Products() {
             <Field label="Product name"><Input value={ed.name} onChange={(e) => setEd({ ...ed, name: e.target.value })} required /></Field>
             <Field label="Category"><Select value={ed.category_id || ''} onChange={(e) => setEd({ ...ed, category_id: e.target.value })}>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
             <Field label="Brand"><Input value={ed.brand || ''} onChange={(e) => setEd({ ...ed, brand: e.target.value })} /></Field>
+            <Field label="Food Type (Kitchen Veg / Non-Veg)">
+              <Select value={ed.food_type || ''} onChange={(e) => setEd({ ...ed, food_type: e.target.value })}>
+                <option value="">Not applicable (Drink / Other)</option>
+                <option value="veg">Veg</option>
+                <option value="nonveg">Non-Veg</option>
+              </Select>
+            </Field>
             <Field label="Serve mode"><Select value={ed.is_peg ? '1' : '0'} onChange={(e) => setEd({ ...ed, is_peg: e.target.value === '1' })}><option value="1">Bottle + Peg (ml tracked)</option><option value="0">Unit / Bottle only</option></Select></Field>
             <Field label="Bottle size (ml)"><Input type="number" value={ed.size_ml} onChange={(e) => setEd({ ...ed, size_ml: e.target.value })} /></Field>
             <Field label="Unit of measure"><Input value={ed.unit} onChange={(e) => setEd({ ...ed, unit: e.target.value })} /></Field>

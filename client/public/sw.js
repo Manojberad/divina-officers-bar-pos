@@ -1,6 +1,6 @@
 /* BarTill service worker – offline app shell + image cache. No external requests. */
-const SHELL = 'bartill-shell-v27';
-const RUNTIME = 'bartill-runtime-v27';
+const SHELL = 'bartill-shell-v28';
+const RUNTIME = 'bartill-runtime-v28';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/Login_bg.webp', '/Login_logo.png'])).then(() => self.skipWaiting()));

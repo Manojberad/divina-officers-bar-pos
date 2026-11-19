@@ -86,8 +86,9 @@ export function seed({ withOrders = true } = {}) {
       fs.writeFileSync(path.join(UPLOAD_DIR, file), svg(label, color, kind));
     }
     const catId = q.get('SELECT id FROM categories WHERE name=?', cat).id;
-    const id = Number(q.run(`INSERT INTO products(name, category_id, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, favourite)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, name, catId, brand, desc, `/uploads/${file}`, size, unit, peg, pp, sp, pegp, ['Royal Oak Reserve', 'Premium Lager 650ml', 'Old Navy XXX Rum', 'Cola 300ml'].includes(name) ? 1 : 0).lastInsertRowid);
+    const foodType = cat === 'From the Kitchen' ? (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(name) ? 'nonveg' : 'veg') : null;
+    const id = Number(q.run(`INSERT INTO products(name, category_id, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, food_type, favourite)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, name, catId, brand, desc, `/uploads/${file}`, size, unit, peg, pp, sp, pegp, foodType, ['Royal Oak Reserve', 'Premium Lager 650ml', 'Old Navy XXX Rum', 'Cola 300ml'].includes(name) ? 1 : 0).lastInsertRowid);
     const p = getProduct(id);
     // Opening + purchase history so the dashboard has data. Extra stock is consumed by sample orders (keep 0/1/2-stock demo items intact).
     const extra = withOrders && stock > 3 ? (peg ? 3 : unit === 'plate' ? 15 : 24) : 0;

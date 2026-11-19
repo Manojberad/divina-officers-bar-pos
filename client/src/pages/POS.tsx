@@ -5,8 +5,19 @@ import { Button, Field, Input, Modal, Select, StockDot, Textarea, cx } from '../
 
 export interface Product {
   id: number; name: string; category: string; category_id: number; brand?: string; description?: string; image?: string; size_ml: number; unit: string;
-  is_peg: boolean; selling_price: number; peg_price: number; favourite: boolean; available?: boolean; stock_status?: string; stock_display?: number; stock_unit?: string;
+  is_peg: boolean; food_type?: 'veg' | 'nonveg' | null; selling_price: number; peg_price: number; favourite: boolean; available?: boolean; stock_status?: string; stock_display?: number; stock_unit?: string;
 }
+
+const VegMark = ({ type }: { type?: 'veg' | 'nonveg' | null }) =>
+  type === 'veg' ? (
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border-2 border-emerald-600 bg-white" title="Veg">
+      <span className="h-2 w-2 rounded-full bg-emerald-600" />
+    </span>
+  ) : type === 'nonveg' ? (
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border-2 border-red-600 bg-white" title="Non-Veg">
+      <span className="h-2 w-2 rounded-full bg-red-600" />
+    </span>
+  ) : null;
 interface Line { key: string; product_id: number; name: string; image?: string; serve_type: 'bottle' | 'peg' | 'unit'; peg_ml?: number; qty: number; unit_price: number; custom_price?: boolean }
 
 const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${ml || ''}`;
@@ -17,6 +28,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   const [products, setProducts] = useState<Product[]>(preload?.products || []);
   const [categories, setCategories] = useState<any[]>(preload?.categories || []);
   const [cat, setCat] = useState<number | 'fav' | null>(null);
+  const [kitchenFilter, setKitchenFilter] = useState<'all' | 'veg' | 'nonveg'>('all');
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Line[]>(() => JSON.parse(localStorage.getItem(`cart-${mode}`) || '[]'));
   const [picker, setPicker] = useState<Product | null>(null);
@@ -38,10 +50,20 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   useEffect(() => { if (preload) { setProducts(preload.products); setCategories(preload.categories); } }, [preload]);
   useEffect(() => { localStorage.setItem(`cart-${mode}`, JSON.stringify(cart)); }, [cart, mode]);
 
+  const activeCatObj = categories.find((c) => c.id === cat);
+  const isKitchenCat = /kitchen/i.test(activeCatObj?.name || '');
+
   const shown = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return products.filter((p) => (cat === 'fav' ? p.favourite : cat ? p.category_id === cat : true) && (!s || `${p.name} ${p.brand} ${p.category}`.toLowerCase().includes(s)));
-  }, [products, cat, search]);
+    return products.filter((p) => {
+      if (cat === 'fav' ? !p.favourite : cat ? p.category_id !== cat : false) return false;
+      if (isKitchenCat && kitchenFilter !== 'all') {
+        const ft = p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg');
+        if (ft !== kitchenFilter) return false;
+      }
+      return !s || `${p.name} ${p.brand} ${p.category}`.toLowerCase().includes(s);
+    });
+  }, [products, cat, isKitchenCat, kitchenFilter, search]);
 
   const add = (p: Product, serve: Line['serve_type'], peg_ml?: number) => {
     const unit_price = serve === 'peg' ? Math.round((p.peg_price * (peg_ml || 30)) / 30 * 100) / 100 : p.selling_price;
@@ -187,7 +209,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             {[{ id: null, name: 'All' }, ...categories].map((c: any) => (
               <button
                 key={String(c.id)}
-                onClick={() => setCat(c.id)}
+                onClick={() => { setCat(c.id); setKitchenFilter('all'); }}
                 className={cx(
                   'whitespace-nowrap rounded-full px-5 py-2 text-sm font-bold transition-all',
                   cat === c.id
@@ -199,46 +221,109 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
               </button>
             ))}
           </div>
+          {isKitchenCat && (
+            <div className="flex flex-wrap items-center gap-2">
+              {([['all', 'All Kitchen'], ['veg', 'Veg'], ['nonveg', 'Non-Veg']] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setKitchenFilter(k)}
+                  className={cx(
+                    'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition',
+                    kitchenFilter === k
+                      ? k === 'veg'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : k === 'nonveg'
+                          ? 'bg-red-600 text-white shadow-sm'
+                          : 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                      : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                  )}
+                >
+                  {k === 'veg' && <VegMark type="veg" />}
+                  {k === 'nonveg' && <VegMark type="nonveg" />}
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Product Cards Grid */}
-        <div className="grid flex-1 auto-rows-max grid-cols-2 gap-3.5 overflow-auto pb-4 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-          {shown.map((p) => (
-            <div
-              key={p.id}
-              onClick={() => tap(p)}
-              role="button"
-              className={cx(
-                'horizon-shadow group relative cursor-pointer overflow-hidden rounded-[20px] border border-transparent bg-white p-3 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230]',
-                isOut(p) && 'opacity-50',
-              )}
-            >
-              <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-[#F4F7FE] dark:bg-[#252D3D]">
-                {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center text-4xl">🍹</div>}
-                {staff && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); toggleFav(p); }}
-                    className="absolute right-2.5 top-2.5 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-base text-[#422AFB] shadow-sm dark:bg-[#1C2230]/90 dark:text-[#818CF8]"
-                  >
-                    {p.favourite ? '★' : '☆'}
-                  </button>
-                )}
-              </div>
-              <div className="mt-3 px-0.5">
-                <div className="truncate text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{p.name}</div>
-                <div className="mt-0.5 truncate text-xs font-medium text-[#94A3B8]">
-                  {p.is_peg ? `Small (30 ml) ${money(p.peg_price)} · Large (60 ml) ${money(p.peg_price * 2)}` : p.description || p.category}
+        {/* Product Cards Grid (grouped into Veg & Non-Veg sections inside From the Kitchen) */}
+        <div className="min-h-0 flex-1 overflow-auto pb-4">
+          {(() => {
+            const renderCard = (p: Product) => {
+              const ft = p.food_type || (/kitchen/i.test(p.category || '') ? (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg') : null);
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => tap(p)}
+                  role="button"
+                  className={cx(
+                    'horizon-shadow group relative cursor-pointer overflow-hidden rounded-[20px] border border-transparent bg-white p-3 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230]',
+                    isOut(p) && 'opacity-50',
+                  )}
+                >
+                  <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-[#F4F7FE] dark:bg-[#252D3D]">
+                    {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center text-4xl">🍹</div>}
+                    {ft && <span className="absolute left-2.5 top-2.5 shadow-sm"><VegMark type={ft} /></span>}
+                    {staff && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleFav(p); }}
+                        className="absolute right-2.5 top-2.5 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-base text-[#422AFB] shadow-sm dark:bg-[#1C2230]/90 dark:text-[#818CF8]"
+                      >
+                        {p.favourite ? '★' : '☆'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-3 px-0.5">
+                    <div className="truncate text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{p.name}</div>
+                    <div className="mt-0.5 truncate text-xs font-medium text-[#94A3B8]">
+                      {p.is_peg ? `Small (30 ml) ${money(p.peg_price)} · Large (60 ml) ${money(p.peg_price * 2)}` : p.description || p.category}
+                    </div>
+                    <div className="mt-2.5 flex items-center justify-between">
+                      <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                        {p.is_peg && !staff ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
+                      </span>
+                      {p.stock_status ? <StockDot s={p.stock_status} label={`${p.stock_display}`} /> : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-2.5 flex items-center justify-between">
-                  <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
-                    {p.is_peg && !staff ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
-                  </span>
-                  {p.stock_status ? <StockDot s={p.stock_status} label={`${p.stock_display}`} /> : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
+              );
+            };
+
+            if (isKitchenCat && kitchenFilter === 'all') {
+              const vegItems = shown.filter((p) => (p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg')) === 'veg');
+              const nonVegItems = shown.filter((p) => (p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg')) === 'nonveg');
+              return (
+                <div className="space-y-5">
+                  <div>
+                    <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
+                      <VegMark type="veg" /> <span>Veg ({vegItems.length})</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                      {vegItems.map(renderCard)}
+                      {vegItems.length === 0 && <div className="col-span-full py-4 text-xs text-[#94A3B8]">No Veg items found</div>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-red-600 dark:text-red-400">
+                      <VegMark type="nonveg" /> <span>Non-Veg ({nonVegItems.length})</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                      {nonVegItems.map(renderCard)}
+                      {nonVegItems.length === 0 && <div className="col-span-full py-4 text-xs text-[#94A3B8]">No Non-Veg items found</div>}
+                    </div>
+                  </div>
                 </div>
+              );
+            }
+
+            return (
+              <div className="grid auto-rows-max grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                {shown.map(renderCard)}
+                {shown.length === 0 && <div className="col-span-full py-10 text-center text-sm font-medium text-[#94A3B8]">No products found</div>}
               </div>
-            </div>
-          ))}
-          {shown.length === 0 && <div className="col-span-full py-10 text-center text-sm font-medium text-[#94A3B8]">No products found</div>}
+            );
+          })()}
         </div>
       </section>
 
