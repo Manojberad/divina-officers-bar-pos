@@ -159,7 +159,7 @@ export default function Users() {
         </Card>
       )}
       <Card
-        title={`Registered Users (${memberCount} / 50 Officers & Staff · ${users.length - memberCount} Guests)`}
+        title={`Registered Users (${memberCount} / 100 Officers & Staff · ${users.length - memberCount} Guests)`}
         actions={
           <div className="flex flex-wrap gap-2">
             <label className="cursor-pointer rounded-2xl bg-[#F4F7FE] px-3.5 py-2.5 text-sm font-bold text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3]">

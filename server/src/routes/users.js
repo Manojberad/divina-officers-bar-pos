@@ -7,7 +7,7 @@ import { broadcast } from '../events.js';
 
 const r = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5e6 } });
-const MAX_USERS = 50;
+const MAX_USERS = 100;
 const ROLES = ['admin', 'member', 'bartender', 'customer', 'guest'];
 const COLS = 'id, name, service_no, rank, mobile, email, category, role, active, approval_status, approved_by, approved_at, alcohol_limit, must_change_pin, created_at';
 
