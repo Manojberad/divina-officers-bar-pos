@@ -1,4 +1,5 @@
 import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
@@ -43,17 +44,29 @@ export const Textarea = (p: any) => <textarea {...p} className={cx(inputCls, p.c
 
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 backdrop-blur-xs p-0 sm:items-center sm:p-4" onClick={onClose}>
-      <div className={cx('max-h-[90dvh] w-full overflow-y-auto overflow-x-hidden rounded-t-[24px] border border-transparent bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl dark:border-[#2E384D] dark:bg-[#1C2230] sm:rounded-[24px] sm:p-6', wide ? 'max-w-4xl' : 'max-w-lg')} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between gap-2">
+  const content = (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4" onClick={onClose}>
+      <div
+        className={cx(
+          'flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-[24px] border border-transparent bg-white shadow-2xl dark:border-[#2E384D] dark:bg-[#1C2230] sm:max-h-[88dvh] sm:rounded-[24px]',
+          wide ? 'max-w-4xl' : 'max-w-lg',
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E9EDF7] px-5 py-4 dark:border-[#2A3346] sm:px-6">
           <h2 className="min-w-0 truncate text-base font-bold text-[#1B2559] dark:text-[#E6EDF3] sm:text-lg">{title}</h2>
           <button onClick={onClose} className="shrink-0 rounded-xl bg-[#F4F7FE] px-3 py-1 text-xl leading-none text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3] dark:hover:bg-[#2E384D]" aria-label="Close">×</button>
         </div>
-        {children}
+        <div
+          className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-5 pb-[max(3rem,calc(env(safe-area-inset-bottom)+2.5rem))] pt-4 sm:px-6 sm:pb-6"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 }
 
 export const STATUS_STYLE: Record<string, string> = {

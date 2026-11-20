@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api, placeOrder } from '../lib/api';
 import { useApp, isStaffRole } from '../lib/app';
 import { Button, Field, Input, Modal, Select, StockDot, Textarea, cx } from '../components/ui';
@@ -141,15 +142,30 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
     } catch (e: any) { toast(e.message, 'error'); } finally { setBusy(false); }
   };
 
-  const cartPanel = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-[#E9EDF7] p-4 dark:border-[#2A3346]">
+  const renderCartPanel = (onClose?: () => void) => (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#E9EDF7] p-4 dark:border-[#2A3346]">
         <h2 className="text-lg font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">
           Current Order <span className="text-sm font-semibold text-[#94A3B8]">({count})</span>
         </h2>
-        {cart.length > 0 && <button className="text-xs font-bold text-[#F87171]" onClick={() => setCart([])}>Clear All</button>}
+        <div className="flex items-center gap-2.5">
+          {cart.length > 0 && <button type="button" className="text-xs font-bold text-[#F87171]" onClick={() => setCart([])}>Clear All</button>}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close cart"
+              className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#F4F7FE] text-xl leading-none text-[#1B2559] dark:bg-[#252D3D] dark:text-[#E6EDF3]"
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex-1 space-y-2.5 overflow-auto p-3.5">
+      <div
+        className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain p-3.5"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
         {cart.length === 0 && <div className="py-16 text-center text-sm font-medium text-[#94A3B8]">Tap a product card to add it</div>}
         {cart.map((l) => (
           <div key={l.key} className="flex items-center gap-2.5 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
@@ -180,7 +196,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
           </div>
         ))}
       </div>
-      <div className="space-y-2.5 border-t border-[#E9EDF7] p-4 dark:border-[#2A3346]">
+      <div className="shrink-0 space-y-2.5 border-t border-[#E9EDF7] p-4 pb-[max(2.25rem,calc(env(safe-area-inset-bottom)+1.5rem))] dark:border-[#2A3346] lg:pb-4">
         {staff && (
           <div className="grid grid-cols-2 gap-2">
             <Select value={opts.user_id} onChange={(e) => setOpts({ ...opts, user_id: e.target.value })}>
@@ -254,7 +270,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
     document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const fabBottom = mode === 'qr' ? 'bottom-[calc(1rem+env(safe-area-inset-bottom))]' : 'bottom-[calc(4.75rem+env(safe-area-inset-bottom))]';
+  const fabBottom = mode === 'qr' ? 'bottom-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]' : 'bottom-[calc(4.9rem+env(safe-area-inset-bottom))]';
 
   return (
     <div className="flex flex-col gap-3 p-1.5 sm:p-2 lg:h-full lg:min-h-0 lg:flex-row lg:gap-4">
@@ -476,7 +492,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         </div>
 
         {/* Product Cards Grid (single scroll on mobile, inner scroll on lg+ desktop) */}
-        <div className="pb-20 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pb-4">
+        <div className="pb-28 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pb-4">
           {(() => {
             const renderCard = (p: Product) => {
               const ft = p.sub_category === 'Non-Veg' || p.food_type === 'nonveg'
@@ -589,33 +605,45 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
 
       {/* Desktop Cart Sidebar Card */}
       <aside className="horizon-shadow hidden w-[380px] shrink-0 overflow-hidden rounded-[20px] border border-transparent bg-white dark:border-[#2A3346] dark:bg-[#1C2230] lg:block">
-        {cartPanel}
+        {renderCartPanel()}
       </aside>
 
-      {/* MOBILE-ONLY Floating Quick Products / Categories Menu Button (mirrors Cart FAB) */}
-      <button
-        type="button"
-        onClick={() => setShowQuickMenu(true)}
-        className={cx(
-          'fixed left-3 z-30 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#1B2559] px-4 py-3 text-xs font-extrabold text-white shadow-xl transition active:scale-95 dark:bg-[#252D3D] md:hidden',
-          fabBottom,
-        )}
-      >
-        <span>☰</span>
-        <span>Quick Menu</span>
-      </button>
+      {/* Portaled Mobile/Tablet Floating Action Buttons (above bottom navbar on iOS Safari; hidden while modals/sheets are open) */}
+      {!showCart && !showQuickMenu && !picker && typeof document !== 'undefined' && createPortal(
+        <>
+          {/* MOBILE-ONLY Floating Quick Products / Categories Menu Button */}
+          <button
+            type="button"
+            onClick={() => setShowQuickMenu(true)}
+            className={cx(
+              'no-print fixed left-3 z-40 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#1B2559] px-3.5 py-3 text-xs font-extrabold text-white shadow-xl transition active:scale-95 dark:bg-[#252D3D] md:hidden',
+              fabBottom,
+            )}
+          >
+            <span>☰</span>
+            <span>Quick Menu</span>
+          </button>
 
-      {/* Floating Cart Pill on Mobile & Tablet */}
-      <button
-        type="button"
-        onClick={() => setShowCart(true)}
-        className={cx(
-          'horizon-gradient fixed right-3 z-30 rounded-full px-5 py-3 text-xs font-extrabold text-white shadow-xl transition active:scale-95 sm:px-6 sm:py-3.5 sm:text-sm lg:hidden',
-          fabBottom,
-        )}
-      >
-        🛒 {count} · {money(total)}
-      </button>
+          {/* Floating Cart / Order Now Button on Mobile & Tablet */}
+          <button
+            type="button"
+            onClick={() => setShowCart(true)}
+            className={cx(
+              'no-print horizon-gradient fixed right-3 z-40 flex items-center gap-1.5 rounded-full px-4 py-3 text-xs font-extrabold text-white shadow-xl ring-2 ring-white/25 transition active:scale-95 sm:px-5 sm:py-3.5 sm:text-sm lg:hidden',
+              fabBottom,
+            )}
+          >
+            <span>🛒</span>
+            <span>Order Now</span>
+            {count > 0 && (
+              <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold">
+                {count} · {money(total)}
+              </span>
+            )}
+          </button>
+        </>,
+        document.body,
+      )}
 
       {/* MOBILE-ONLY Quick Products / Categories Jump Bottom Sheet */}
       <Modal open={showQuickMenu} onClose={() => setShowQuickMenu(false)} title="Quick Products Menu">
@@ -690,13 +718,16 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         </div>
       </Modal>
 
-      {showCart && (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs lg:hidden" onClick={() => setShowCart(false)}>
-          <div className="absolute bottom-0 right-0 top-0 flex w-full max-w-md flex-col bg-white pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] dark:bg-[#1C2230]" onClick={(e) => e.stopPropagation()}>
-            <button className="absolute right-4 top-[max(0.85rem,env(safe-area-inset-top))] z-10 text-2xl text-[#94A3B8]" onClick={() => setShowCart(false)}>×</button>
-            {cartPanel}
+      {showCart && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[80] flex justify-end bg-black/55 backdrop-blur-xs lg:hidden" onClick={() => setShowCart(false)}>
+          <div
+            className="flex h-full max-h-[100dvh] w-full max-w-md flex-col bg-white pt-[max(0.5rem,env(safe-area-inset-top))] shadow-2xl dark:bg-[#1C2230]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {renderCartPanel(() => setShowCart(false))}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       <Modal open={!!picker} onClose={() => setPicker(null)} title={picker?.name || ''}>

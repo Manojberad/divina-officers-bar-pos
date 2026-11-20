@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp, type Role, ADMIN_ROLES, STAFF_ROLES, PRIVILEGED_OFFICER_ROLES, isAdminRole, isStaffRole, roleLabel } from '../lib/app';
 import { api, conn, onConn, subscribe } from '../lib/api';
 import { Badge, Button, Input, Modal, cx, fmtDate } from './ui';
@@ -224,7 +225,7 @@ export default function Layout() {
       </div>
 
       {/* Officer Profile Card at Bottom */}
-      <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] xl:p-5">
+      <div className="p-4 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] xl:p-5">
         <div className="horizon-gradient relative overflow-hidden rounded-[20px] p-4 text-white shadow-lg">
           <div className="relative z-10 flex items-center gap-3">
             <button onClick={() => { setDrawerOpen(false); nav('/account'); }} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20 text-sm font-extrabold backdrop-blur-xs">
@@ -263,14 +264,15 @@ export default function Layout() {
         {SidebarContent}
       </aside>
 
-      {/* Mobile / Tablet Slide-Over Hamburger Drawer */}
-      {drawerOpen && (
-        <div className="no-print fixed inset-0 z-50 flex xl:hidden">
+      {/* Mobile / Tablet Slide-Over Hamburger Drawer (portaled to body so iOS Safari never hides it behind bottom navbar) */}
+      {drawerOpen && typeof document !== 'undefined' && createPortal(
+        <div className="no-print fixed inset-0 z-[70] flex xl:hidden">
           <div className="fixed inset-0 bg-black/55 backdrop-blur-xs" onClick={() => setDrawerOpen(false)} />
           <div className="relative z-10 h-full w-[300px] max-w-[85vw] shadow-2xl">
             {SidebarContent}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Main Content Area */}
@@ -414,7 +416,7 @@ export default function Layout() {
         </header>
 
         {/* Single Smooth Scrollable Viewport (prevents iOS double scrollbars & horizontal overflow) */}
-        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 pb-[calc(5.25rem+env(safe-area-inset-bottom))] pt-1.5 sm:px-4 md:pt-2 xl:pb-4">
+        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 pb-[calc(5.75rem+env(safe-area-inset-bottom))] pt-1.5 sm:px-4 md:pt-2 xl:pb-4">
           <Outlet />
         </main>
 
