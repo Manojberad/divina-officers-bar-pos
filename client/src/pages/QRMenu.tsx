@@ -1,151 +1,131 @@
 import { useEffect, useState } from 'react';
 import { api, subscribe } from '../lib/api';
 import { useApp } from '../lib/app';
-import { Badge, Button, Card, Field, Input, Modal, fmtDate } from '../components/ui';
+import { Badge, Button, Card, fmtDate } from '../components/ui';
 import POS from './POS';
 import { itemLabel } from './OrdersBoard';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 export default function QRMenu() {
   const { code } = useParams();
-  const { user, login, logout, money, toast } = useApp();
+  const nav = useNavigate();
+  const { user, logout, money } = useApp();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState('');
+  const [viewMode, setViewMode] = useState<'choose' | 'view'>('choose');
   const [tab, setTab] = useState<'menu' | 'orders'>('menu');
   const [orders, setOrders] = useState<any[]>([]);
-
-  // Auth / Guest Registration Modal
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authTab, setAuthTab] = useState<'login' | 'guest'>('login');
-  const [sn, setSn] = useState('');
-  const [pin, setPin] = useState('');
-  const [lerr, setLerr] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  // Guest registration form
-  const [gForm, setGForm] = useState({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
-  const [pendingGuest, setPendingGuest] = useState<{ service_no: string; rank: string; name: string; pin: string; status: 'pending' | 'approved' | 'rejected' } | null>(() => {
-    try { return JSON.parse(localStorage.getItem('pending-guest') || 'null'); } catch { return null; }
-  });
 
   useEffect(() => { api(`/menu/${code}`).then(setData).catch((e) => setErr(e.message)); }, [code]);
   const loadOrders = () => user && api('/orders?limit=20', { cache: false }).then(setOrders).catch(() => {});
   useEffect(() => { loadOrders(); if (user) return subscribe((ev) => ev === 'order' && loadOrders()); }, [user]);
 
-  // Poll + SSE listen while a guest is awaiting bartender approval
-  useEffect(() => {
-    if (!pendingGuest || pendingGuest.status !== 'pending' || user) return;
-    const check = async () => {
-      try {
-        const s = await api(`/auth/guest-status/${encodeURIComponent(pendingGuest.service_no)}`, { cache: false });
-        if (s.approval_status === 'approved' && s.active) {
-          const updated = { ...pendingGuest, status: 'approved' as const };
-          setPendingGuest(updated);
-          localStorage.setItem('pending-guest', JSON.stringify(updated));
-          toast('✔ Your guest pass was approved by the bartender!');
-          // Auto-login guest so they can immediately start ordering
-          try {
-            await login(pendingGuest.service_no, pendingGuest.pin, 'guest');
-            localStorage.removeItem('pending-guest');
-            setPendingGuest(null);
-            setAuthOpen(false);
-          } catch { /* fallback to manual login button */ }
-        } else if (s.approval_status === 'rejected') {
-          const updated = { ...pendingGuest, status: 'rejected' as const };
-          setPendingGuest(updated);
-          localStorage.setItem('pending-guest', JSON.stringify(updated));
-          toast('Your guest registration request was declined.', 'error');
-        }
-      } catch { /* ignore */ }
-    };
-    check();
-    const timer = setInterval(check, 5000);
-    const unsub = subscribe((ev, d) => {
-      if (ev === 'guest_request' && String(d?.service_no || '').toLowerCase() === pendingGuest.service_no.toLowerCase()) check();
-    });
-    return () => { clearInterval(timer); unsub(); };
-  }, [pendingGuest, user]);
-
   if (err) return <div className="p-10 text-center text-red-500">{err}</div>;
-  if (!data) return <div className="p-10 text-center text-[#94A3B8]">Loading menu…</div>;
+  if (!data) return <div className="flex h-[100dvh] items-center justify-center bg-[#F4F7FE] text-sm font-semibold text-[#94A3B8] dark:bg-[#131722]">Loading menu…</div>;
 
-  const signIn = async (e: React.FormEvent) => {
-    e.preventDefault(); setLerr(''); setBusy(true);
-    try {
-      await login(sn.trim(), pin.trim(), 'member');
-      localStorage.removeItem('pending-guest');
-      setPendingGuest(null);
-      setAuthOpen(false); setSn(''); setPin('');
-    } catch (e: any) { setLerr(e.message); } finally { setBusy(false); }
-  };
+  const goLoginToOrder = () => nav('/login', { state: { from: `/menu/${code}` } });
 
-  const registerGuest = async (e: React.FormEvent) => {
-    e.preventDefault(); setLerr(''); setBusy(true);
-    try {
-      const chosenPin = gForm.pin.trim() || gForm.service_no.trim();
-      const r = await api('/auth/guest-register', {
-        method: 'POST',
-        body: { ...gForm, pin: chosenPin, table_code: code },
-      });
-      if (r.status === 'approved') {
-        toast('Already approved! Signing you in…');
-        await login(gForm.service_no.trim(), chosenPin, 'guest');
-        setAuthOpen(false);
-      } else {
-        const pg = { service_no: gForm.service_no.trim(), rank: gForm.rank.trim(), name: gForm.name.trim(), pin: chosenPin, status: 'pending' as const };
-        setPendingGuest(pg);
-        localStorage.setItem('pending-guest', JSON.stringify(pg));
-        toast('Guest registration sent to bartender for approval');
-      }
-    } catch (e: any) { setLerr(e.message); } finally { setBusy(false); }
-  };
+  // QR Scan Landing Screen: strictly 2 options only (1. View Menu Only, 2. Login to Order)
+  if (!user && viewMode === 'choose') {
+    return (
+      <div className="flex min-h-[100dvh] w-full max-w-full flex-col items-center justify-center overflow-x-hidden bg-[#F4F7FE] px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2rem,env(safe-area-inset-top))] dark:bg-[#131722]">
+        <div className="horizon-shadow w-full max-w-sm rounded-[28px] border border-[#E9EDF7] bg-white p-7 text-center dark:border-[#2A3346] dark:bg-[#1C2230]">
+          <img
+            src={data.bar.logo || '/Login_logo.png'}
+            alt={data.bar.name}
+            className="mx-auto h-20 w-20 rounded-2xl object-contain"
+          />
+          <h1 className="font-ubuntu mt-4 text-xl font-extrabold tracking-tight text-[#1B2559] dark:text-[#E6EDF3]">
+            {data.bar.name}
+          </h1>
+          <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#422AFB]/10 px-3.5 py-1 text-xs font-extrabold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
+            <span>📍</span>
+            <span>{data.table.name}</span>
+          </div>
+          <p className="mt-3 text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">
+            Choose how you would like to continue
+          </p>
+
+          <div className="mt-6 space-y-3">
+            <button
+              type="button"
+              onClick={() => setViewMode('view')}
+              className="flex w-full items-center justify-between rounded-2xl border border-[#E0E5F2] bg-[#F4F7FE] px-5 py-4 text-left transition active:scale-[0.98] hover:border-[#422AFB]/40 hover:bg-[#E9EDF7] dark:border-[#2E384D] dark:bg-[#252D3D] dark:hover:border-[#818CF8]/40 dark:hover:bg-[#2E384D]"
+            >
+              <div>
+                <div className="text-base font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">📖 View Menu Only</div>
+                <div className="mt-0.5 text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">Browse drinks, food & prices</div>
+              </div>
+              <span className="text-lg font-bold text-[#94A3B8]">→</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={goLoginToOrder}
+              className="horizon-gradient flex w-full items-center justify-between rounded-2xl px-5 py-4 text-left text-white shadow-[0_10px_24px_rgba(99,102,241,0.32)] transition active:scale-[0.98] hover:brightness-105"
+            >
+              <div>
+                <div className="text-base font-extrabold">🔐 Login to Order</div>
+                <div className="mt-0.5 text-xs font-medium text-white/80">Sign in to order for {data.table.name}</div>
+              </div>
+              <span className="text-lg font-bold text-white/90">→</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-[100dvh] w-full max-w-full flex-col overflow-hidden bg-[#F4F7FE] dark:bg-[#131722]">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#E9EDF7] bg-white px-3 pb-2.5 pt-[max(0.65rem,env(safe-area-inset-top))] dark:border-[#2A3346] dark:bg-[#1C2230] sm:px-4">
-        <div className="flex items-center gap-2.5">
-          {data.bar.logo ? <img src={data.bar.logo} className="h-9 w-9 rounded-lg object-contain" alt="" /> : <span className="text-2xl">🍸</span>}
-          <div>
-            <div className="font-ubuntu font-bold leading-tight text-[#1B2559] dark:text-[#E6EDF3]">{data.bar.name}</div>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!user && (
+            <button
+              type="button"
+              onClick={() => setViewMode('choose')}
+              aria-label="Back to QR options"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F7FE] text-base font-bold text-[#1B2559] dark:bg-[#252D3D] dark:text-[#E6EDF3]"
+            >
+              ←
+            </button>
+          )}
+          <img src={data.bar.logo || '/Login_logo.png'} className="h-9 w-9 shrink-0 rounded-lg object-contain" alt="" />
+          <div className="min-w-0">
+            <div className="font-ubuntu truncate font-bold leading-tight text-[#1B2559] dark:text-[#E6EDF3]">{data.bar.name}</div>
             <div className="text-xs font-bold text-[#422AFB] dark:text-[#818CF8]">📍 {data.table.name}</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {user && (
-            <Button size="sm" variant={tab === 'orders' ? 'primary' : 'subtle'} onClick={() => setTab(tab === 'menu' ? 'orders' : 'menu')}>
-              {tab === 'menu' ? 'My Orders' : 'Menu'}
-            </Button>
-          )}
           {user ? (
-            <div className="flex items-center gap-2">
+            <>
+              <Button size="sm" variant={tab === 'orders' ? 'primary' : 'subtle'} onClick={() => setTab(tab === 'menu' ? 'orders' : 'menu')}>
+                {tab === 'menu' ? 'My Orders' : 'Menu'}
+              </Button>
               {user.role === 'guest' && <Badge s="placed">Guest</Badge>}
               <Button size="sm" variant="ghost" onClick={logout}>{user.rank ? `${user.rank} ` : ''}{user.name.split(' ')[0]} · Sign out</Button>
-            </div>
-          ) : (
-            <>
-              <Button size="sm" variant="subtle" onClick={() => { setAuthTab('guest'); setLerr(''); setAuthOpen(true); }}>Guest Register</Button>
-              <Button size="sm" onClick={() => { setAuthTab('login'); setLerr(''); setAuthOpen(true); }}>Sign In</Button>
             </>
+          ) : (
+            <Button size="sm" onClick={goLoginToOrder}>Login to Order</Button>
           )}
         </div>
       </header>
 
-      {!user && pendingGuest?.status === 'pending' && (
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/15 px-4 py-2.5 text-xs font-semibold text-amber-800 dark:text-amber-200">
-          <span>⏳ Guest pass for <b>{pendingGuest.rank} {pendingGuest.name} ({pendingGuest.service_no})</b> is awaiting bartender approval… This page will sign you in automatically once approved.</span>
-          <button className="underline" onClick={() => { localStorage.removeItem('pending-guest'); setPendingGuest(null); }}>Dismiss</button>
-        </div>
-      )}
-
-      {!user && pendingGuest?.status !== 'pending' && (
+      {!user && (
         <div className="bg-[#422AFB]/10 px-4 py-2 text-center text-xs font-semibold text-[#1B2559] dark:bg-[#6366F1]/15 dark:text-[#E6EDF3]">
-          Browse the menu below. <button className="font-extrabold text-[#422AFB] underline dark:text-[#818CF8]" onClick={() => { setAuthTab('login'); setAuthOpen(true); }}>Member / Guest Login</button> or <button className="font-extrabold text-[#422AFB] underline dark:text-[#818CF8]" onClick={() => { setAuthTab('guest'); setAuthOpen(true); }}>Register as a Guest</button> to order for {data.table.name}.
+          Viewing Menu Only · <button type="button" className="font-extrabold text-[#422AFB] underline dark:text-[#818CF8]" onClick={goLoginToOrder}>Login to Order</button> for {data.table.name}
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
         {tab === 'menu' ? (
-          <POS mode="qr" tableCode={code} preload={{ products: data.products, categories: data.categories }} onPlaced={() => { setTab('orders'); loadOrders(); }} />
+          <POS
+            mode="qr"
+            readOnly={!user}
+            tableCode={code}
+            preload={{ products: data.products, categories: data.categories }}
+            onPlaced={() => { setTab('orders'); loadOrders(); }}
+          />
         ) : (
           <div className="mx-auto max-w-xl space-y-3 p-4">
             {orders.length === 0 && <Card><div className="py-6 text-center text-sm text-[#94A3B8]">No orders placed yet.</div></Card>}
@@ -166,62 +146,6 @@ export default function QRMenu() {
           </div>
         )}
       </div>
-
-      <Modal open={authOpen} onClose={() => setAuthOpen(false)} title={authTab === 'login' ? 'Member / Guest Sign In' : 'Guest Registration'}>
-        <div className="mb-4 grid grid-cols-2 gap-2">
-          <Button variant={authTab === 'login' ? 'primary' : 'subtle'} size="sm" onClick={() => { setAuthTab('login'); setLerr(''); }}>Sign In</Button>
-          <Button variant={authTab === 'guest' ? 'primary' : 'subtle'} size="sm" onClick={() => { setAuthTab('guest'); setLerr(''); }}>New Guest Register</Button>
-        </div>
-
-        {authTab === 'login' ? (
-          <form onSubmit={signIn} method="post" autoComplete="on" className="space-y-3">
-            <Field label="Service Number">
-              <Input id="qr-username" name="username" autoComplete="username" placeholder="Enter Service No." value={sn} onChange={(e) => setSn(e.target.value)} required autoFocus autoCapitalize="characters" />
-            </Field>
-            <Field label="PIN">
-              <Input id="qr-password" name="password" autoComplete="current-password" placeholder="Enter your PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} required />
-            </Field>
-            {lerr && <div className="rounded-xl bg-red-500/15 p-2.5 text-sm font-medium text-red-500">{lerr}</div>}
-            <Button className="w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign In'}</Button>
-          </form>
-        ) : pendingGuest?.status === 'pending' ? (
-          <div className="space-y-3 py-4 text-center">
-            <div className="text-4xl">⏳</div>
-            <div className="text-base font-bold">Awaiting Bartender Approval</div>
-            <p className="text-sm text-[#94A3B8]">
-              Request sent for <b>{pendingGuest.rank} {pendingGuest.name}</b> ({pendingGuest.service_no}). The bartender has been notified and you will be logged in automatically once approved.
-            </p>
-            <Button variant="ghost" size="sm" onClick={() => { localStorage.removeItem('pending-guest'); setPendingGuest(null); }}>
-              Register a different guest
-            </Button>
-          </div>
-        ) : (
-          <form onSubmit={registerGuest} className="space-y-3">
-            <p className="text-xs text-[#94A3B8]">
-              Visiting guests can register below to scan & order. Your request will be approved by the bartender and notified to the Admin. Checkout is settled via <b>Cash</b> or <b>UPI</b>.
-            </p>
-            <Field label="Service Number">
-              <Input placeholder="e.g. IC-90123 / G-101" value={gForm.service_no} onChange={(e) => setGForm({ ...gForm, service_no: e.target.value })} required autoCapitalize="characters" />
-            </Field>
-            <Field label="Rank">
-              <Input placeholder="e.g. Maj, Capt, Wg Cdr, Mr/Ms" value={gForm.rank} onChange={(e) => setGForm({ ...gForm, rank: e.target.value })} required />
-            </Field>
-            <Field label="Full Name">
-              <Input placeholder="Enter your full name" value={gForm.name} onChange={(e) => setGForm({ ...gForm, name: e.target.value })} required />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Mobile (optional)">
-                <Input placeholder="10-digit mobile" value={gForm.mobile} onChange={(e) => setGForm({ ...gForm, mobile: e.target.value })} />
-              </Field>
-              <Field label="PIN (blank = Service No)">
-                <Input type="password" placeholder="Optional PIN" value={gForm.pin} onChange={(e) => setGForm({ ...gForm, pin: e.target.value })} />
-              </Field>
-            </div>
-            {lerr && <div className="rounded-xl bg-red-500/15 p-2.5 text-sm font-medium text-red-500">{lerr}</div>}
-            <Button className="w-full" disabled={busy}>{busy ? 'Submitting…' : 'Submit Guest Registration'}</Button>
-          </form>
-        )}
-      </Modal>
     </div>
   );
 }

@@ -28,7 +28,7 @@ interface Line { key: string; product_id: number; name: string; image?: string; 
 
 const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${ml || ''}`;
 
-export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void }) {
+export default function POS({ mode, tableCode, preload, onPlaced, readOnly = false }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void; readOnly?: boolean }) {
   const { user, money, toast, reloadUser } = useApp();
   const staff = mode === 'staff' || (mode !== 'self' && isStaffRole(user?.role));
   const [products, setProducts] = useState<Product[]>(preload?.products || []);
@@ -110,6 +110,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   };
   const isOut = (p: Product) => p.stock_status === 'out' || p.available === false;
   const tap = (p: Product) => {
+    if (readOnly) return;
     if (isOut(p)) return toast(`${p.name} is out of stock`, 'error');
     if (p.is_peg) setPicker(p); else add(p, 'unit');
   };
@@ -506,11 +507,12 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
               return (
                 <div
                   key={p.id}
-                  onClick={() => tap(p)}
-                  role="button"
+                  onClick={readOnly ? undefined : () => tap(p)}
+                  role={readOnly ? undefined : 'button'}
                   title={stockTitle}
                   className={cx(
-                    'horizon-shadow group relative min-w-0 cursor-pointer overflow-hidden rounded-[18px] border border-transparent bg-white p-2.5 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230] sm:rounded-[20px] sm:p-3',
+                    'horizon-shadow group relative min-w-0 overflow-hidden rounded-[18px] border border-transparent bg-white p-2.5 text-left transition-all duration-150 dark:border-[#2A3346] dark:bg-[#1C2230] sm:rounded-[20px] sm:p-3',
+                    !readOnly && 'cursor-pointer hover:-translate-y-0.5 active:scale-[.98]',
                     isOut(p) && 'opacity-50',
                   )}
                 >
@@ -604,9 +606,11 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
       </section>
 
       {/* Desktop Cart Sidebar Card */}
-      <aside className="horizon-shadow hidden w-[380px] shrink-0 overflow-hidden rounded-[20px] border border-transparent bg-white dark:border-[#2A3346] dark:bg-[#1C2230] lg:block">
-        {renderCartPanel()}
-      </aside>
+      {!readOnly && (
+        <aside className="horizon-shadow hidden w-[380px] shrink-0 overflow-hidden rounded-[20px] border border-transparent bg-white dark:border-[#2A3346] dark:bg-[#1C2230] lg:block">
+          {renderCartPanel()}
+        </aside>
+      )}
 
       {/* Portaled Mobile/Tablet Floating Action Buttons (above bottom navbar on iOS Safari; hidden while modals/sheets are open) */}
       {!showCart && !showQuickMenu && !picker && typeof document !== 'undefined' && createPortal(
@@ -625,22 +629,24 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
           </button>
 
           {/* Floating Cart / Order Now Button on Mobile & Tablet */}
-          <button
-            type="button"
-            onClick={() => setShowCart(true)}
-            className={cx(
-              'no-print horizon-gradient fixed right-3 z-40 flex items-center gap-1.5 rounded-full px-4 py-3 text-xs font-extrabold text-white shadow-xl ring-2 ring-white/25 transition active:scale-95 sm:px-5 sm:py-3.5 sm:text-sm lg:hidden',
-              fabBottom,
-            )}
-          >
-            <span>🛒</span>
-            <span>Order Now</span>
-            {count > 0 && (
-              <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold">
-                {count} · {money(total)}
-              </span>
-            )}
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setShowCart(true)}
+              className={cx(
+                'no-print horizon-gradient fixed right-3 z-40 flex items-center gap-1.5 rounded-full px-4 py-3 text-xs font-extrabold text-white shadow-xl ring-2 ring-white/25 transition active:scale-95 sm:px-5 sm:py-3.5 sm:text-sm lg:hidden',
+                fabBottom,
+              )}
+            >
+              <span>🛒</span>
+              <span>Order Now</span>
+              {count > 0 && (
+                <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold">
+                  {count} · {money(total)}
+                </span>
+              )}
+            </button>
+          )}
         </>,
         document.body,
       )}
@@ -718,7 +724,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         </div>
       </Modal>
 
-      {showCart && typeof document !== 'undefined' && createPortal(
+      {!readOnly && showCart && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[80] flex justify-end bg-black/55 backdrop-blur-xs lg:hidden" onClick={() => setShowCart(false)}>
           <div
             className="flex h-full max-h-[100dvh] w-full max-w-md flex-col bg-white pt-[max(0.5rem,env(safe-area-inset-top))] shadow-2xl dark:bg-[#1C2230]"
