@@ -1,8 +1,8 @@
 {
-  "name": "bartill",
+  "name": "divinabar",
   "version": "1.0.0",
   "private": true,
-  "description": "Free, self-hosted, offline-first Bar Management & POS System",
+  "description": "Free, self-hosted, offline-first Officers' Bar Management System",
   "scripts": {
     "install:all": "npm --prefix server install && npm --prefix client install",
     "build": "npm --prefix client run build",

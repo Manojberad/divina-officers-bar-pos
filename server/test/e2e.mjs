@@ -6,7 +6,7 @@ import http from 'node:http';
 import * as XLSX from 'xlsx';
 
 // Isolated temp data directory so tests never touch production data
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bartill-test-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'divinabar-test-'));
 process.env.DATA_DIR = tmp;
 process.env.SEED_MODE = 'demo';
 
@@ -305,7 +305,7 @@ for (const t of types) {
 console.log('8. Backup & Restore round-trip…');
 const beforeOrders = q.get('SELECT COUNT(*) n FROM orders').n;
 const backup = (await req('/api/admin/backup', { token: adminTok })).data;
-assert.equal(backup.app, 'bartill');
+assert.equal(backup.app, 'divinabar');
 q.run("DELETE FROM orders WHERE status='cancelled'");
 const rfd = new FormData();
 rfd.append('file', new Blob([JSON.stringify(backup)]), 'backup.json');

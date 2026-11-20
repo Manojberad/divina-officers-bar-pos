@@ -101,7 +101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [reloadSettings, toast]);
 
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); }, [dark]);
-  useEffect(() => { document.documentElement.style.setProperty('--accent', settings.accent || '#f59e0b'); document.title = `${settings.bar_name} · POS`; }, [settings]);
+  useEffect(() => { document.documentElement.style.setProperty('--accent', settings.accent || '#f59e0b'); document.title = settings.bar_name || 'DivinaBar'; }, [settings]);
 
   const login = async (service_no: string, pin?: string, mode?: 'member' | 'admin' | 'guest', remember = true) => {
     const body = pin !== undefined ? { service_no, pin, mode, remember } : { pin: service_no, mode, remember };

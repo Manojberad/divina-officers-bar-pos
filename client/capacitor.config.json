@@ -1,6 +1,6 @@
 {
-  "appId": "local.bartill.pos",
-  "appName": "BarTill POS",
+  "appId": "local.divinabar.app",
+  "appName": "DivinaBar",
   "webDir": "dist",
   "server": {
     "cleartext": true,

@@ -1,7 +1,7 @@
 // API client with IndexedDB read-cache and an offline order queue.
 // Orders carry a client_uuid; the server de-duplicates on it so replays are safe.
 
-const DB_NAME = 'bartill';
+const DB_NAME = 'divinabar';
 let dbp: Promise<IDBDatabase> | null = null;
 function idb(): Promise<IDBDatabase> {
   if (!dbp) {

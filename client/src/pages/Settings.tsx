@@ -110,7 +110,7 @@ export default function Settings() {
             </div>
           </Card>
 
-          <Card title="POS, Inventory, Approval & Report Preferences">
+          <Card title="Bar, Inventory, Approval & Report Preferences">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Field label="Standard peg sizes" hint="Fixed: Small (30 ml) & Large (60 ml). Full bottle (750 ml) is restricted to Bartender & Admin."><Input value="30, 60 (Small / Large)" disabled /></Field>
               <Field label="Inventory deduction stage">
@@ -132,7 +132,7 @@ export default function Settings() {
       {tab === 'backup' && (
         <Card title="JSON Database Backup & Restoration" actions={
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => download('/admin/backup', `bartill-backup-${new Date().toISOString().slice(0, 10)}.json`)}>⬇ Download Full Backup (with images)</Button>
+            <Button onClick={() => download('/admin/backup', `divinabar-backup-${new Date().toISOString().slice(0, 10)}.json`)}>⬇ Download Full Backup (with images)</Button>
             <Button variant="subtle" onClick={async () => { await api('/admin/backups', { method: 'POST' }); toast('Snapshot created on server'); load(); }}>+ Create Local Snapshot</Button>
             <label className="cursor-pointer rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-gray-900">
               ⬆ Restore from JSON File

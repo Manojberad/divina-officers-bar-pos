@@ -6,7 +6,7 @@ import { Badge, Button, Input, Modal, cx, fmtDate } from './ui';
 
 const ICONS: Record<string, ReactNode> = {
   '/dashboard': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" /></svg>,
-  '/pos': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z" /></svg>,
+  '/bar': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z" /></svg>,
   '/orders': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
   '/order': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M21 5V3H3v2l8 9v5H6v2h12v-2h-5v-5l8-9zM7.43 7 5.66 5h12.69l-1.78 2H7.43z" /></svg>,
   '/favorite-orders': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" /></svg>,
@@ -21,7 +21,7 @@ const ICONS: Record<string, ReactNode> = {
 
 const NAV: { to: string; label: string; short: string; roles: Role[] }[] = [
   { to: '/dashboard', label: 'Main Dashboard', short: 'Home', roles: ADMIN_ROLES },
-  { to: '/pos', label: 'Products', short: 'Products', roles: STAFF_ROLES },
+  { to: '/bar', label: 'Products', short: 'Products', roles: STAFF_ROLES },
   { to: '/orders', label: 'Orders Board', short: 'Orders', roles: STAFF_ROLES },
   { to: '/order', label: 'Bar Menu', short: 'Menu', roles: ['member', 'customer', 'guest'] },
   { to: '/favorite-orders', label: 'Favorite Orders', short: 'Favs', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
@@ -117,7 +117,7 @@ export default function Layout() {
             <div className="font-ubuntu truncate text-sm font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] xl:text-base">
               {settings.bar_name || "DIVINA OFFICERS' BAR"}
             </div>
-            <div className="text-[10px] font-semibold uppercase tracking-widest text-[#94A3B8]">Horizon POS</div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-[#94A3B8]">DivinaBar</div>
           </div>
         </div>
         <button

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: divina-officers-bar-pos
+    name: divina-officers-bar
     runtime: docker
     plan: free
     envVars:

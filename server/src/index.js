@@ -80,7 +80,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = key && cert ? https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, app) : http.createServer(app);
   server.listen(PORT, HOST, () => {
     const proto = key && cert ? 'https' : 'http';
-    console.log(`\n  BarTill server running (offline, single authoritative DB)`);
+    console.log(`\n  DivinaBar server running (offline, single authoritative DB)`);
     console.log(`  Local:   ${proto}://localhost:${PORT}`);
     lanAddresses().forEach((a) => console.log(`  Network: ${proto}://${a}:${PORT}`));
     console.log('');

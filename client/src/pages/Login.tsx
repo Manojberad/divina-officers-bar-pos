@@ -10,7 +10,7 @@ export default function Login() {
   const loc = useLocation() as any;
 
   const saved = (() => {
-    try { return JSON.parse(localStorage.getItem('bartill_saved_login') || 'null'); } catch { return null; }
+    try { return JSON.parse(localStorage.getItem('divinabar_saved_login') || localStorage.getItem('bartill_saved_login') || 'null'); } catch { return null; }
   })();
 
   const [mode, setMode] = useState<'member' | 'admin'>(saved?.mode === 'admin' ? 'admin' : 'member');
@@ -64,8 +64,9 @@ export default function Login() {
     setErr('');
     try {
       const u = await login(sn.trim(), pin.trim(), mode, remember);
-      if (remember) localStorage.setItem('bartill_saved_login', JSON.stringify({ sn: sn.trim(), mode }));
-      else localStorage.removeItem('bartill_saved_login');
+      if (remember) localStorage.setItem('divinabar_saved_login', JSON.stringify({ sn: sn.trim(), mode }));
+      else localStorage.removeItem('divinabar_saved_login');
+      localStorage.removeItem('bartill_saved_login');
       if (u.must_change_pin) toast('Please change your initial PIN (Account page)');
       nav(loc.state?.from || homeFor(u.role), { replace: true });
     } catch (e: any) {

@@ -1,4 +1,4 @@
-# BarTill – Architecture, Schema & Roadmap
+# DivinaBar – Architecture, Schema & Roadmap
 
 ## 1. Overview
 

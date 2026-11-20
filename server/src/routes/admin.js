@@ -43,7 +43,7 @@ r.post('/settings/image/:kind', admin, imageUpload.single('image'), (req, res) =
 /* ---------- Backup / restore ---------- */
 r.get('/backup', admin, (req, res) => {
   audit(req.user.id, 'backup.download', 'backup');
-  res.setHeader('Content-Disposition', `attachment; filename="bartill-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.setHeader('Content-Disposition', `attachment; filename="divinabar-backup-${new Date().toISOString().slice(0, 10)}.json"`);
   res.json(createBackupObject({ includeImages: req.query.images !== '0' }));
 });
 

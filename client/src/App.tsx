@@ -26,7 +26,7 @@ function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   return <>{children}</>;
 }
 
-export const homeFor = (r?: Role) => (isAdminRole(r) ? '/dashboard' : r === 'bartender' ? '/pos' : '/order');
+export const homeFor = (r?: Role) => (isAdminRole(r) ? '/dashboard' : r === 'bartender' ? '/bar' : '/order');
 
 export default function App() {
   const { user } = useApp();
@@ -36,7 +36,8 @@ export default function App() {
       <Route path="/menu/:code" element={<QRMenu />} />
       <Route element={<Guard><Layout /></Guard>}>
         <Route path="/" element={<Navigate to={homeFor(user?.role)} replace />} />
-        <Route path="/pos" element={<Guard roles={['admin', 'bartender']}><POS mode="staff" /></Guard>} />
+        <Route path="/bar" element={<Guard roles={['admin', 'bartender']}><POS mode="staff" /></Guard>} />
+        <Route path="/pos" element={<Navigate to="/bar" replace />} />
         <Route path="/orders" element={<Guard roles={['admin', 'bartender']}><OrdersBoard /></Guard>} />
         <Route path="/order" element={<Guard roles={['admin', 'member', 'customer', 'guest']}><POS mode="self" /></Guard>} />
         <Route path="/favorite-orders" element={<FavoriteOrders />} />

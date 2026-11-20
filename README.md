@@ -1,6 +1,6 @@
-# BarTill — Offline-First Bar Management & POS System
+# DivinaBar — Offline-First Officers' Bar Management System
 
-A self-hosted, completely free, offline-capable Bar Management and POS web application inspired by the clean touch workflow of VesselTill. Built with **React + TypeScript + Tailwind CSS**, **Node.js + Express**, and **SQLite (`node:sqlite` in WAL mode)** — zero payment gateways, zero external APIs, and zero cloud dependencies.
+A self-hosted, completely free, offline-capable Bar Management web application built for officers' messes. Built with **React + TypeScript + Tailwind CSS**, **Node.js + Express**, and **SQLite (`node:sqlite` in WAL mode)** — zero payment gateways, zero external APIs, and zero cloud dependencies.
 
 Architecture, ER diagram, and module breakdown: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
@@ -62,11 +62,11 @@ Run both the server and SQLite database directly on the Android tablet using **T
 2. Inside Termux, install Node.js and copy the project folder:
    ```bash
    pkg update && pkg install nodejs git
-   cd ~/storage/shared/BarTill   # or clone/copy the project folder into ~
+   cd ~/storage/shared/DivinaBar   # or clone/copy the project folder into ~
    npm start
    ```
 3. Open Chrome on the same tablet and visit **`http://localhost:4000`**.
-4. Tap Chrome's menu (**⋮**) → **Add to Home screen / Install app** to install BarTill as a fullscreen standalone **PWA**.
+4. Tap Chrome's menu (**⋮**) → **Add to Home screen / Install app** to install DivinaBar as a fullscreen standalone **PWA**.
 
 ### Mode 2: Local Wi-Fi Network (Multiple Tablets + Customer QR Phones, No Internet)
 

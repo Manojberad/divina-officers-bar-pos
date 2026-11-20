@@ -13,11 +13,11 @@ export function createBackupObject({ includeImages = true } = {}) {
       if (fs.statSync(fp).isFile()) images[f] = fs.readFileSync(fp).toString('base64');
     }
   }
-  return { app: 'bartill', version: q.get('SELECT MAX(version) v FROM schema_migrations').v, created_at: now(), data, images };
+  return { app: 'divinabar', version: q.get('SELECT MAX(version) v FROM schema_migrations').v, created_at: now(), data, images };
 }
 
 export function restoreBackupObject(obj) {
-  if (!obj || obj.app !== 'bartill' || !obj.data) throw Object.assign(new Error('Not a valid BarTill backup file'), { status: 400 });
+  if (!obj || !['divinabar', 'bartill'].includes(obj.app) || !obj.data) throw Object.assign(new Error('Not a valid DivinaBar backup file'), { status: 400 });
   // Safety copy before restore
   writeBackupFile('pre-restore');
   db.exec('PRAGMA foreign_keys = OFF');
