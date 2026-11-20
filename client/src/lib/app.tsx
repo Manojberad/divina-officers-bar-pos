@@ -1,9 +1,40 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, setToken, getToken } from './api';
 
-export type Role = 'admin' | 'member' | 'bartender' | 'customer' | 'guest';
+export type Role =
+  | 'superadmin'
+  | 'commanding_officer'
+  | 'mess_secretary'
+  | 'bar_incharge'
+  | 'admin'
+  | 'member'
+  | 'bartender'
+  | 'customer'
+  | 'guest';
+
+export const PRIVILEGED_OFFICER_ROLES: Role[] = ['commanding_officer', 'mess_secretary', 'bar_incharge'];
+export const ADMIN_ROLES: Role[] = ['superadmin', 'admin', ...PRIVILEGED_OFFICER_ROLES];
+export const STAFF_ROLES: Role[] = [...ADMIN_ROLES, 'bartender'];
+
+export const ROLE_LABELS: Record<string, string> = {
+  superadmin: 'Super Admin',
+  commanding_officer: 'Commanding Officer',
+  mess_secretary: 'Mess Secretary',
+  bar_incharge: 'Bar Incharge',
+  admin: 'Admin',
+  bartender: 'Bartender',
+  member: 'Mess Member',
+  customer: 'TD Officer',
+  guest: 'Guest',
+};
+
+export const roleLabel = (r?: string | null) => (r ? ROLE_LABELS[r] || r : '');
+export const isSuperAdmin = (u?: { role?: string } | null) => u?.role === 'superadmin';
+export const isAdminRole = (r?: string | null) => !!r && ADMIN_ROLES.includes(r as Role);
+export const isStaffRole = (r?: string | null) => !!r && STAFF_ROLES.includes(r as Role);
+
 export interface AlcoholUsage { limit: number; used: number; remaining: number | null; scope: 'day' | 'order'; unit: 'pegs' | 'small_eq' }
-export interface User { id: number; name: string; service_no: string; rank?: string; role: Role; category: string; approval_status?: string; alcohol_limit?: number | null; alcohol_usage?: AlcoholUsage; td_start_date?: string | null; td_end_date?: string | null; must_change_pin?: number }
+export interface User { id: number; name: string; service_no: string; rank?: string; branch?: string | null; tors?: string | null; role: Role; designation?: string; category: string; approval_status?: string; alcohol_limit?: number | null; alcohol_usage?: AlcoholUsage; td_start_date?: string | null; td_end_date?: string | null; must_change_pin?: number }
 export interface Settings {
   bar_name: string; currency: string; logo: string; background: string; theme: string; accent: string; peg_sizes: string; approval_hours: string;
   guest_alcohol_limit?: string; member_alcohol_limit?: string; alcohol_limit_scope?: string; alcohol_limit_unit?: string;

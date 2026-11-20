@@ -3,7 +3,7 @@ import multer from 'multer';
 import fs from 'node:fs';
 import path from 'node:path';
 import { q, audit, getSettings, DEFAULT_SETTINGS, BACKUP_DIR } from '../db.js';
-import { requireRole, requireAuth } from '../auth.js';
+import { requireRole, requireAuth, isAdmin } from '../auth.js';
 import { imageUpload } from './catalog.js';
 import { createBackupObject, restoreBackupObject, writeBackupFile, listBackups } from '../jobs.js';
 import { lanAddresses } from './tables.js';
@@ -75,10 +75,17 @@ r.get('/audit', admin, (req, res) => {
 });
 
 r.get('/notifications', requireAuth, (req, res) => {
+  if (isAdmin(req.user)) {
+    return res.json(q.all("SELECT * FROM notifications WHERE target_role IN ('admin', ?) OR user_id=? ORDER BY id DESC LIMIT 50", req.user.role, req.user.id));
+  }
   res.json(q.all('SELECT * FROM notifications WHERE (target_role=? OR user_id=?) ORDER BY id DESC LIMIT 50', req.user.role, req.user.id));
 });
 r.post('/notifications/read', requireAuth, (req, res) => {
-  q.run('UPDATE notifications SET read=1 WHERE target_role=? OR user_id=?', req.user.role, req.user.id);
+  if (isAdmin(req.user)) {
+    q.run("UPDATE notifications SET read=1 WHERE target_role IN ('admin', ?) OR user_id=?", req.user.role, req.user.id);
+  } else {
+    q.run('UPDATE notifications SET read=1 WHERE target_role=? OR user_id=?', req.user.role, req.user.id);
+  }
   res.json({ ok: true });
 });
 

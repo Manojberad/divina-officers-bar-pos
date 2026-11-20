@@ -161,6 +161,61 @@ const migrations = [
   UPDATE products SET food_type = 'veg'
     WHERE category_id = (SELECT id FROM categories WHERE name = 'From the Kitchen') AND food_type IS NULL;
   `,
+  // v8 – Super Admin, 3 Admin-equivalent officer designations (Commanding Officer, Mess Secretary, Bar Incharge), Course Officer category, branch & TORS metadata
+  `
+  CREATE TABLE users_v8(
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    service_no TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    rank TEXT,
+    branch TEXT,
+    tors TEXT,
+    mobile TEXT,
+    email TEXT,
+    category TEXT NOT NULL DEFAULT 'POSTED' CHECK(category IN ('POSTED','COURSE','TD','STAFF','GUEST')),
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('superadmin','commanding_officer','mess_secretary','bar_incharge','admin','member','bartender','customer','guest')),
+    pin_hash TEXT NOT NULL,
+    must_change_pin INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1,
+    approval_status TEXT NOT NULL DEFAULT 'approved' CHECK(approval_status IN ('pending','approved','rejected')),
+    approved_by INTEGER REFERENCES users(id),
+    approved_at TEXT,
+    alcohol_limit INTEGER,
+    td_start_date TEXT,
+    td_end_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  INSERT INTO users_v8(id, name, service_no, rank, mobile, email, category, role, pin_hash, must_change_pin, active, approval_status, approved_by, approved_at, alcohol_limit, td_start_date, td_end_date, created_at)
+    SELECT id, name, service_no, rank, mobile, email, category,
+      CASE WHEN upper(service_no) = 'ADMIN' AND role = 'admin' THEN 'superadmin' ELSE role END,
+      pin_hash, must_change_pin, active, approval_status, approved_by, approved_at, alcohol_limit, td_start_date, td_end_date, created_at
+    FROM users;
+  DROP TABLE users;
+  ALTER TABLE users_v8 RENAME TO users;
+  `,
+  // v9 – Add sub_category to products and consolidate into 3 main categories: Alcohol, Soft Drinks, Food (Packed / Veg / Non-Veg)
+  `
+  ALTER TABLE products ADD COLUMN sub_category TEXT;
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort) VALUES
+    ('Alcohol', 3, 1, 1),
+    ('Soft Drinks', 24, 10, 2),
+    ('Food', 10, 4, 3);
+  UPDATE categories SET sort = 1 WHERE name = 'Alcohol';
+  UPDATE categories SET sort = 2 WHERE name = 'Soft Drinks';
+  UPDATE categories SET sort = 3 WHERE name = 'Food';
+  UPDATE products SET sub_category = 'Packed', category_id = (SELECT id FROM categories WHERE name = 'Food')
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'Packaged Snacks');
+  UPDATE products SET sub_category = CASE WHEN food_type = 'nonveg' THEN 'Non-Veg' ELSE 'Veg' END,
+    category_id = (SELECT id FROM categories WHERE name = 'Food')
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'From the Kitchen');
+  DELETE FROM categories WHERE name IN ('Packaged Snacks', 'From the Kitchen');
+  UPDATE products SET sub_category = 'Whisky' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND (lower(name) LIKE '%whisky%' OR lower(name) LIKE '%malt%' OR lower(name) LIKE '%blenders%' OR lower(name) LIKE '%oak%');
+  UPDATE products SET sub_category = 'Rum' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND lower(name) LIKE '%rum%';
+  UPDATE products SET sub_category = 'Vodka' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND lower(name) LIKE '%vodka%';
+  UPDATE products SET sub_category = 'Gin' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND lower(name) LIKE '%gin%';
+  UPDATE products SET sub_category = 'Wine' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND lower(name) LIKE '%wine%';
+  UPDATE products SET sub_category = 'Beer' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND (lower(name) LIKE '%beer%' OR lower(name) LIKE '%lager%');
+  `,
 ];
 
 export function migrate() {

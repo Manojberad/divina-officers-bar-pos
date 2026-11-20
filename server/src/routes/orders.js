@@ -1,10 +1,9 @@
 import { Router } from 'express';
 import { q } from '../db.js';
-import { requireAuth, optionalAuth } from '../auth.js';
+import { requireAuth, optionalAuth, STAFF } from '../auth.js';
 import { createOrder, transition, approve, loadOrder, HttpError } from '../services.js';
 
 const r = Router();
-const STAFF = ['admin', 'bartender'];
 
 r.get('/', requireAuth, (req, res) => {
   const { status, from, to, user_id, approval, limit = 300, search } = req.query;

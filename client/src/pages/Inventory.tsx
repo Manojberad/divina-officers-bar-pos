@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { useApp } from '../lib/app';
+import { useApp, isAdminRole } from '../lib/app';
 import { Button, Card, DateRange, Field, Input, Modal, Select, StockDot, daysAgo, fmtDate, today } from '../components/ui';
 
 export default function Inventory() {
   const { user, money, toast } = useApp();
-  const admin = user?.role === 'admin';
+  const admin = isAdminRole(user?.role);
   const [tab, setTab] = useState<'stock' | 'purchase' | 'wastage' | 'reconcile' | 'history'>('stock');
   const [products, setProducts] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);

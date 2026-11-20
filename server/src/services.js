@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { q, tx, now, getSettings, audit, notify } from './db.js';
 import { broadcast } from './events.js';
-import { localToday, tdValidity } from './auth.js';
+import { localToday, tdValidity, STAFF, isAdmin } from './auth.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -33,13 +33,19 @@ export const PRODUCT_SELECT = `SELECT p.*, c.name category, c.low_threshold cat_
 export function decorate(p) {
   if (!p) return p;
   const { low, crit } = thresholds(p);
+  const fullBottles = p.is_peg && p.size_ml > 0 ? Math.floor(Math.max(0, p.stock) / p.size_ml) : Math.floor(Math.max(0, p.stock));
+  const looseMl = p.is_peg && p.size_ml > 0 ? Math.round((Math.max(0, p.stock) - fullBottles * p.size_ml) * 100) / 100 : 0;
+  const loosePegs = p.is_peg && p.size_ml > 0 ? Math.round((looseMl / 30) * 100) / 100 : 0;
   return {
     ...p,
     is_peg: !!p.is_peg,
     favourite: !!p.favourite,
     active: !!p.active,
+    sub_category: p.sub_category || null,
     stock_display: Math.round(displayQty(p) * 100) / 100,
     stock_unit: p.is_peg ? 'bottles' : p.unit || 'units',
+    full_bottles: fullBottles,
+    loose_pegs_30ml: loosePegs,
     low_level: low,
     critical_level: crit,
     stock_status: stockStatus(p),
@@ -69,7 +75,6 @@ export function moveStock({ productId, type, qty, unitCost = null, supplier = nu
 
 /* ---------------- Orders ---------------- */
 export const FLOW = ['draft', 'placed', 'accepted', 'preparing', 'served', 'closed'];
-const STAFF = ['admin', 'bartender'];
 const ALLOWED_PEGS = [30, 60];
 
 export function priceItem(p, item, _settings, isStaff) {
@@ -179,7 +184,7 @@ export function createOrder(body, user) {
   });
 
   // Enforce alcohol order limit (for Guests and/or Members as configured by Admin)
-  if (targetUser && status !== 'draft' && !(user?.role === 'admin' && body.override_limit)) {
+  if (targetUser && status !== 'draft' && !(isAdmin(user) && body.override_limit)) {
     const usage = getAlcoholUsage(targetUser, settings);
     if (usage.limit > 0) {
       const incoming = items.reduce((sum, i) => {
@@ -265,13 +270,13 @@ export function transition(orderId, to, user, note, paymentMode = null, paymentR
 
     if (to === 'cancelled') {
       if (['closed', 'cancelled', 'disputed'].includes(from)) throw new HttpError(409, `Cannot cancel a ${from} order`);
-      if (from === 'served' && user.role !== 'admin') throw new HttpError(403, 'Only admin can cancel a served order');
+      if (from === 'served' && !isAdmin(user)) throw new HttpError(403, 'Only admin can cancel a served order');
       if (!isStaff && !(isOwner && ['draft', 'placed'].includes(from))) throw new HttpError(403, 'Not allowed to cancel this order');
       reverse(o, user.id);
     } else if (FLOW.includes(to)) {
       const fi = FLOW.indexOf(from), ti = FLOW.indexOf(to);
       if (from === 'disputed' && to === 'closed') {
-        if (user.role !== 'admin') throw new HttpError(403, 'Only admin resolves disputes');
+        if (!isAdmin(user)) throw new HttpError(403, 'Only admin resolves disputes');
       } else {
         if (fi < 0 || ti <= fi) throw new HttpError(409, `Invalid transition ${from} → ${to}`);
         if (!isStaff && !(isOwner && from === 'draft' && to === 'placed')) throw new HttpError(403, 'Not allowed');

@@ -1,11 +1,24 @@
 import { Router } from 'express';
 import { q, audit, notify, now } from '../db.js';
-import { hashPin, verifyPin, signToken, requireAuth, tdValidity } from '../auth.js';
+import { hashPin, verifyPin, signToken, requireAuth, tdValidity, STAFF, ALL_ROLES, PRIVILEGED_OFFICER_ROLES, roleLabel } from '../auth.js';
 import { broadcast } from '../events.js';
 import { getAlcoholUsage } from '../services.js';
 
 const r = Router();
 const attempts = new Map(); // simple brute-force throttle per key
+
+function canLoginInMode(u, mode) {
+  if (!u) return false;
+  if (mode === 'admin') return STAFF.includes(u.role);
+  if (mode === 'guest') return u.role === 'guest';
+  if (mode === 'member') {
+    if (['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES].includes(u.role)) return true;
+    // Officer accounts with Super Admin privilege (e.g. Posted-in / Course officers) can also log in via Member tab
+    if (u.role === 'superadmin' && ['POSTED', 'COURSE'].includes(u.category)) return true;
+    return false;
+  }
+  return ALL_ROLES.includes(u.role);
+}
 
 r.post('/login', (req, res) => {
   const { service_no, pin, mode } = req.body || {};
@@ -17,18 +30,10 @@ r.post('/login', (req, res) => {
   if (a.until > Date.now()) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
 
   let u = null;
-  const allowedRoles =
-    mode === 'admin'
-      ? ['admin', 'bartender']
-      : mode === 'guest'
-        ? ['guest']
-        : mode === 'member'
-          ? ['member', 'customer', 'guest']
-          : ['admin', 'bartender', 'member', 'customer', 'guest'];
 
   if (service_no) {
     const candidate = q.get('SELECT * FROM users WHERE service_no=? COLLATE NOCASE', String(service_no).trim());
-    if (candidate && allowedRoles.includes(candidate.role) && verifyPin(rawPin, candidate.pin_hash)) {
+    if (candidate && canLoginInMode(candidate, mode) && verifyPin(rawPin, candidate.pin_hash)) {
       if (candidate.role === 'guest' && candidate.approval_status === 'pending') {
         return res.status(403).json({ error: 'Your guest registration is pending bartender approval' });
       }
@@ -41,19 +46,20 @@ r.post('/login', (req, res) => {
     }
   } else {
     // PIN-only fallback
-    const placeholders = allowedRoles.map(() => '?').join(',');
-    const direct = q.get(`SELECT * FROM users WHERE role IN (${placeholders}) AND service_no=? COLLATE NOCASE`, ...allowedRoles, rawPin);
-    if (direct && verifyPin(rawPin, direct.pin_hash)) {
+    const direct = q.get('SELECT * FROM users WHERE service_no=? COLLATE NOCASE', rawPin);
+    if (direct && canLoginInMode(direct, mode) && verifyPin(rawPin, direct.pin_hash)) {
       if (direct.role === 'guest' && direct.approval_status === 'pending') {
         return res.status(403).json({ error: 'Your guest registration is pending bartender approval' });
       }
       if (direct.role === 'guest' && direct.approval_status === 'rejected') {
         return res.status(403).json({ error: 'Your guest registration was declined by the bartender' });
       }
+      const tdv = tdValidity(direct);
+      if (!tdv.ok) return res.status(403).json({ error: tdv.message });
       if (direct.active && direct.approval_status === 'approved') u = direct;
     } else {
-      const candidates = q.all(`SELECT * FROM users WHERE active=1 AND approval_status='approved' AND role IN (${placeholders})`, ...allowedRoles);
-      u = candidates.find((c) => verifyPin(rawPin, c.pin_hash)) || null;
+      const candidates = q.all("SELECT * FROM users WHERE active=1 AND approval_status='approved'").filter((c) => canLoginInMode(c, mode));
+      u = candidates.find((c) => verifyPin(rawPin, c.pin_hash) && tdValidity(c).ok) || null;
     }
   }
 
@@ -62,12 +68,13 @@ r.post('/login', (req, res) => {
     attempts.set(key, a);
     audit(null, 'auth.login_failed', 'user', null, { service_no: service_no || null, mode: mode || 'pin' });
     return res.status(401).json({
-      error: mode === 'admin' ? 'Invalid Admin ID or PIN' : mode === 'guest' ? 'Invalid Guest Service No. or PIN' : 'Invalid service number or PIN',
+      error: mode === 'admin' ? 'Invalid Admin / Staff ID or PIN' : mode === 'guest' ? 'Invalid Guest Service No. or PIN' : 'Invalid service number or PIN',
     });
   }
   attempts.delete(key);
   audit(u.id, 'auth.login', 'user', u.id);
   const { pin_hash, ...user } = u;
+  user.designation = roleLabel(user.role);
   const hours = req.body?.remember ? 24 * 7 : 12;
   res.json({ token: signToken({ uid: u.id, role: u.role }, hours), user });
 });
@@ -148,8 +155,8 @@ r.get('/guest-status/:service_no', (req, res) => {
 });
 
 r.get('/me', requireAuth, (req, res) => {
-  const u = q.get('SELECT id, name, service_no, rank, mobile, email, category, role, approval_status, alcohol_limit, td_start_date, td_end_date, must_change_pin FROM users WHERE id=?', req.user.id);
-  res.json({ ...u, alcohol_usage: getAlcoholUsage(u) });
+  const u = q.get('SELECT id, name, service_no, rank, branch, tors, mobile, email, category, role, approval_status, alcohol_limit, td_start_date, td_end_date, must_change_pin FROM users WHERE id=?', req.user.id);
+  res.json({ ...u, designation: roleLabel(u.role), alcohol_usage: getAlcoholUsage(u) });
 });
 
 r.post('/change-pin', requireAuth, (req, res) => {

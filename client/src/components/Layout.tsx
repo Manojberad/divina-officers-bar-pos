@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useApp, type Role } from '../lib/app';
+import { useApp, type Role, ADMIN_ROLES, STAFF_ROLES, PRIVILEGED_OFFICER_ROLES, isAdminRole, isStaffRole, roleLabel } from '../lib/app';
 import { api, conn, onConn, subscribe } from '../lib/api';
 import { Badge, Button, Input, Modal, cx, fmtDate } from './ui';
 
@@ -19,24 +19,26 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 const NAV: { to: string; label: string; roles: Role[] }[] = [
-  { to: '/dashboard', label: 'Main Dashboard', roles: ['admin'] },
-  { to: '/pos', label: 'POS Terminal', roles: ['admin', 'bartender'] },
-  { to: '/orders', label: 'Orders Board', roles: ['admin', 'bartender'] },
+  { to: '/dashboard', label: 'Main Dashboard', roles: ADMIN_ROLES },
+  { to: '/pos', label: 'POS Terminal', roles: STAFF_ROLES },
+  { to: '/orders', label: 'Orders Board', roles: STAFF_ROLES },
   { to: '/order', label: 'Bar Menu', roles: ['member', 'customer', 'guest'] },
-  { to: '/my-orders', label: 'My Orders', roles: ['member', 'customer', 'guest'] },
-  { to: '/inventory', label: 'Inventory & Stock', roles: ['admin', 'bartender'] },
-  { to: '/products', label: 'Products & Pricing', roles: ['admin'] },
-  { to: '/users', label: 'Officers & Users', roles: ['admin'] },
-  { to: '/tables', label: 'Tables & QR Codes', roles: ['admin'] },
-  { to: '/reports', label: 'Reports & Exports', roles: ['admin'] },
-  { to: '/settings', label: 'Admin Settings', roles: ['admin'] },
+  { to: '/my-orders', label: 'My Orders', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
+  { to: '/inventory', label: 'Inventory & Stock', roles: STAFF_ROLES },
+  { to: '/products', label: 'Products & Pricing', roles: ADMIN_ROLES },
+  { to: '/users', label: 'Officers & Users', roles: ADMIN_ROLES },
+  { to: '/tables', label: 'Tables & QR Codes', roles: ADMIN_ROLES },
+  { to: '/reports', label: 'Reports & Exports', roles: ADMIN_ROLES },
+  { to: '/settings', label: 'Admin Settings', roles: ADMIN_ROLES },
 ];
 
 export default function Layout() {
   const { user, logout, settings, dark, toggleDark, reloadSettings, toast } = useApp();
   const nav = useNavigate();
   const loc = useLocation();
-  const isStaff = !!user && ['admin', 'bartender'].includes(user.role);
+  const isStaff = isStaffRole(user?.role);
+  const designation = user?.designation || roleLabel(user?.role);
+  const showDesignationPill = !!user && (isAdminRole(user.role) || user.role === 'bartender');
 
   const [c, setC] = useState({ ...conn });
   const [notes, setNotes] = useState<any[]>([]);
@@ -70,7 +72,12 @@ export default function Layout() {
 
   const unread = notes.filter((n) => !n.read).length;
   const pendingGuests = guestReqs.filter((g) => g.approval_status === 'pending');
-  const items = NAV.filter((n) => user && n.roles.includes(user.role));
+  const items = NAV.filter((n) => {
+    if (!user || !n.roles.includes(user.role)) return false;
+    // Dedicated non-officer ADMIN account does not need personal My Orders tab
+    if (n.to === '/my-orders' && user.role === 'superadmin' && user.category === 'STAFF') return false;
+    return true;
+  });
   const currentTitle = items.find((i) => loc.pathname.startsWith(i.to))?.label || (loc.pathname === '/account' ? 'Profile & PIN' : settings.bar_name);
   const initials = (user?.name || 'U').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 
@@ -160,7 +167,15 @@ export default function Layout() {
             </button>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-bold">{user?.rank ? `${user.rank} ` : ''}{user?.name}</div>
-              <div className="truncate text-xs text-white/80 capitalize">{user?.role} · {user?.service_no}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                <span className={cx(
+                  'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-extrabold tracking-wide',
+                  isAdminRole(user?.role) ? 'bg-[#FBBF24] text-[#1B2559]' : 'bg-white/20 text-white',
+                )}>
+                  {isAdminRole(user?.role) ? `★ ${designation}` : designation}
+                </span>
+                <span className="truncate text-[11px] text-white/80">{user?.service_no}</span>
+              </div>
             </div>
           </div>
           <div className="relative z-10 mt-3 flex gap-2">
@@ -201,9 +216,16 @@ export default function Layout() {
             <div className="text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">
               Pages <span className="mx-1">/</span> <span className="font-semibold text-[#1B2559] dark:text-[#E6EDF3]">{currentTitle}</span>
             </div>
-            <h1 className="truncate text-xl font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] sm:text-2xl">
-              {currentTitle}
-            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] sm:text-2xl">
+                {currentTitle}
+              </h1>
+              {showDesignationPill && (
+                <span className="hidden items-center gap-1 rounded-full bg-gradient-to-r from-[#D97706] to-[#F59E0B] px-2.5 py-0.5 text-[11px] font-extrabold text-white shadow-xs sm:inline-flex">
+                  {isAdminRole(user?.role) && '★ '}{designation}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Right Pill Toolbar */}
@@ -298,7 +320,7 @@ export default function Layout() {
             <button
               onClick={() => nav('/account')}
               className="horizon-gradient flex h-9 w-9 items-center justify-center rounded-full text-xs font-extrabold text-white shadow-sm"
-              title={`${user?.name} (${user?.role})`}
+              title={`${user?.rank ? `${user.rank} ` : ''}${user?.name} (${designation})`}
             >
               {initials}
             </button>

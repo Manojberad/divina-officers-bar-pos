@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { q, tx, audit, UPLOAD_DIR, getSettings } from '../db.js';
-import { requireRole, optionalAuth } from '../auth.js';
+import { requireRole, optionalAuth, isStaff } from '../auth.js';
 import { PRODUCT_SELECT, decorate, getProduct, moveStock, toBase, baseCost } from '../services.js';
 
 const r = Router();
@@ -58,7 +58,7 @@ const parseFoodType = (v) => {
 };
 
 r.get('/products', optionalAuth, (req, res) => {
-  const staff = req.user && ['admin', 'bartender'].includes(req.user.role);
+  const staff = isStaff(req.user);
   const rows = q.all(`${PRODUCT_SELECT} ${staff && req.query.all ? '' : 'WHERE p.active=1'} ORDER BY c.sort, p.name`).map(decorate);
   if (staff) return res.json(rows);
   // Public / customer view hides costs and exact stock
@@ -66,7 +66,7 @@ r.get('/products', optionalAuth, (req, res) => {
 });
 
 export const publicView = (p) => ({
-  id: p.id, name: p.name, category: p.category, category_id: p.category_id, brand: p.brand, description: p.description, image: p.image,
+  id: p.id, name: p.name, category: p.category, category_id: p.category_id, sub_category: p.sub_category || null, brand: p.brand, description: p.description, image: p.image,
   size_ml: p.size_ml, unit: p.unit, is_peg: p.is_peg, food_type: p.food_type || null, selling_price: p.selling_price, peg_price: p.peg_price,
   favourite: p.favourite, available: p.stock_status !== 'out', active: p.active,
 });
@@ -77,7 +77,8 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
   const prodRows = [
     {
       Name: 'Paneer Tikka',
-      Category: 'From the Kitchen',
+      Category: 'Food',
+      'Sub Category': 'Veg',
       'Food Type': 'Veg',
       Brand: 'Kitchen',
       Description: 'Tandoori spiced cottage cheese',
@@ -93,7 +94,8 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
     },
     {
       Name: 'Mutton Seekh Kebab',
-      Category: 'From the Kitchen',
+      Category: 'Food',
+      'Sub Category': 'Non-Veg',
       'Food Type': 'Non-Veg',
       Brand: 'Kitchen',
       Description: 'Spiced minced mutton skewers',
@@ -110,6 +112,7 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
     {
       Name: 'Single Malt 15Y',
       Category: 'Alcohol',
+      'Sub Category': 'Whisky',
       'Food Type': '',
       Brand: 'Highland',
       Description: 'Aged 15 years single malt',
@@ -127,8 +130,7 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
   const catRows = [
     { Name: 'Alcohol', 'Low Threshold': 3, 'Critical Threshold': 1, Sort: 1 },
     { Name: 'Soft Drinks', 'Low Threshold': 24, 'Critical Threshold': 10, Sort: 2 },
-    { Name: 'Packaged Snacks', 'Low Threshold': 10, 'Critical Threshold': 4, Sort: 3 },
-    { Name: 'From the Kitchen', 'Low Threshold': 10, 'Critical Threshold': 4, Sort: 4 },
+    { Name: 'Food', 'Low Threshold': 10, 'Critical Threshold': 4, Sort: 3 },
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodRows), 'Products');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), 'Categories');
@@ -191,22 +193,25 @@ r.post('/products/import', requireRole('admin'), sheetUpload.single('file'), (re
         const minS = numOrNull(n.minstock ?? n.lowstock);
         const critS = numOrNull(n.criticalstock);
         const foodType = parseFoodType(n.foodtype ?? n.vegnonveg ?? n.diet ?? n.type);
+        let subCat = String(n.subcategory ?? n.drinktype ?? '').trim() || null;
+        if (!subCat && foodType === 'veg') subCat = 'Veg';
+        if (!subCat && foodType === 'nonveg') subCat = 'Non-Veg';
         const brand = n.brand ? String(n.brand).trim() : null;
         const desc = n.description ? String(n.description).trim() : null;
 
         const existing = q.get('SELECT * FROM products WHERE name=? COLLATE NOCASE', name);
         if (existing) {
           q.run(
-            `UPDATE products SET category_id=?, brand=COALESCE(?,brand), description=COALESCE(?,description), unit=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=COALESCE(?,min_stock), critical_stock=COALESCE(?,critical_stock), food_type=COALESCE(?,food_type), active=1 WHERE id=?`,
-            catId, brand, desc, unit, pp, sp, pegp, minS, critS, foodType, existing.id,
+            `UPDATE products SET category_id=?, sub_category=COALESCE(?,sub_category), brand=COALESCE(?,brand), description=COALESCE(?,description), unit=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=COALESCE(?,min_stock), critical_stock=COALESCE(?,critical_stock), food_type=COALESCE(?,food_type), active=1 WHERE id=?`,
+            catId, subCat, brand, desc, unit, pp, sp, pegp, minS, critS, foodType, existing.id,
           );
           result.updated++;
         } else {
           const id = Number(
             q.run(
-              `INSERT INTO products(name, category_id, brand, description, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, stock)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-              name, catId, brand, desc, sizeMl, unit, isPeg, pp, sp, pegp, minS, critS, foodType,
+              `INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, stock)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+              name, catId, subCat, brand, desc, sizeMl, unit, isPeg, pp, sp, pegp, minS, critS, foodType,
             ).lastInsertRowid,
           );
           const opening = Number(n.openingstock ?? n.stock ?? 0) || 0;
@@ -231,18 +236,24 @@ r.get('/products/:id', requireRole('admin', 'bartender'), (req, res) => {
 });
 
 function productFields(b) {
-  return [b.name?.trim(), numOrNull(b.category_id), b.brand || null, b.description || null, Number(b.size_ml) || 0, b.unit || 'bottle',
+  let subCat = b.sub_category ? String(b.sub_category).trim() : null;
+  let foodType = parseFoodType(b.food_type);
+  if (!foodType && subCat === 'Veg') foodType = 'veg';
+  if (!foodType && subCat === 'Non-Veg') foodType = 'nonveg';
+  if (!subCat && foodType === 'veg') subCat = 'Veg';
+  if (!subCat && foodType === 'nonveg') subCat = 'Non-Veg';
+  return [b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null, Number(b.size_ml) || 0, b.unit || 'bottle',
     b.is_peg === true || b.is_peg === '1' || b.is_peg === 1 || b.is_peg === 'true' ? 1 : 0,
-    Number(b.purchase_price) || 0, Number(b.selling_price) || 0, Number(b.peg_price) || 0, numOrNull(b.min_stock), numOrNull(b.critical_stock), parseFoodType(b.food_type)];
+    Number(b.purchase_price) || 0, Number(b.selling_price) || 0, Number(b.peg_price) || 0, numOrNull(b.min_stock), numOrNull(b.critical_stock), foodType];
 }
 
 r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res) => {
   const b = req.body;
   if (!b.name?.trim()) return res.status(400).json({ error: 'Name required' });
   const f = productFields(b);
-  if (f[6] && !(f[4] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
-  const id = Number(q.run(`INSERT INTO products(name, category_id, brand, description, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
+  if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
+  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
   const opening = Number(b.opening_stock) || 0;
   if (opening > 0) {
     const p = getProduct(id);
@@ -257,11 +268,11 @@ r.put('/products/:id', requireRole('admin'), imageUpload.single('image'), (req, 
   if (!p) return res.status(404).json({ error: 'Not found' });
   const b = { ...p, ...req.body };
   const f = productFields(b);
-  if (f[6] && !(f[4] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
-  if (!!f[6] !== !!p.is_peg && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing peg mode' });
-  if (f[6] && p.is_peg && f[4] !== p.size_ml && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing bottle size' });
+  if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
+  if (!!f[7] !== !!p.is_peg && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing peg mode' });
+  if (f[7] && p.is_peg && f[5] !== p.size_ml && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing bottle size' });
   const image = req.file ? `/uploads/${req.file.filename}` : b.image;
-  q.run(`UPDATE products SET name=?, category_id=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
+  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
     ...f, image, b.active === false || b.active === '0' || b.active === 'false' || b.active === 0 ? 0 : 1, p.id);
   const priceChange = ['purchase_price', 'selling_price', 'peg_price'].filter((k) => req.body[k] != null && Number(req.body[k]) !== p[k]);
   audit(req.user.id, priceChange.length ? 'product.price_change' : 'product.update', 'product', p.id,

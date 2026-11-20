@@ -3,7 +3,12 @@ import { api, download } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Button, Card, Field, Input, Modal, Select, StockDot } from '../components/ui';
 
-const BLANK = { name: '', category_id: '', brand: '', description: '', size_ml: 750, unit: 'bottle', is_peg: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, min_stock: '', critical_stock: '', active: true };
+const BLANK = { name: '', category_id: '', sub_category: '', brand: '', description: '', size_ml: 750, unit: 'bottle', is_peg: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, min_stock: '', critical_stock: '', active: true };
+
+const SUB_OPTIONS: Record<string, string[]> = {
+  alcohol: ['Whisky', 'Rum', 'Vodka', 'Gin', 'Brandy', 'Wine', 'Beer'],
+  food: ['Packed', 'Veg', 'Non-Veg'],
+};
 
 export default function Products() {
   const { money, toast } = useApp();
@@ -78,7 +83,7 @@ export default function Products() {
         </p>
         <div className="overflow-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>Category</th><th>Size / Unit</th><th>Peg</th><th>Purchase</th><th>Selling</th><th>Peg (30ml)</th><th>Stock</th><th>Thresholds</th><th /></tr></thead>
+            <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>Category / Sub</th><th>Size / Unit</th><th>Peg</th><th>Purchase</th><th>Selling</th><th>Peg (30ml)</th><th>Stock</th><th>Thresholds</th><th /></tr></thead>
             <tbody>
               {products.map((p) => (
                 <tr key={p.id} className={`border-t dark:border-gray-700 ${!p.active ? 'opacity-50' : ''}`}>
@@ -88,11 +93,20 @@ export default function Products() {
                     {p.food_type === 'veg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-emerald-600" title="Veg"><span className="h-2 w-2 rounded-full bg-emerald-600" /></span>}
                     {p.food_type === 'nonveg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-red-600" title="Non-Veg"><span className="h-2 w-2 rounded-full bg-red-600" /></span>}
                   </td>
-                  <td>{p.category}</td><td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td><td>{p.is_peg ? 'Yes' : 'No'}</td>
+                  <td>
+                    <div className="font-medium">{p.category}</div>
+                    {p.sub_category && <div className="text-xs text-[#94A3B8]">{p.sub_category}</div>}
+                  </td>
+                  <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td><td>{p.is_peg ? 'Yes' : 'No'}</td>
                   <td>{money(p.purchase_price)}</td><td>{money(p.selling_price)}</td><td>{p.is_peg ? money(p.peg_price) : '—'}</td>
-                  <td><StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} /></td>
+                  <td>
+                    <StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} />
+                    {p.is_peg && p.full_bottles != null && (p.full_bottles > 0 || p.loose_pegs_30ml > 0) && (
+                      <div className="text-[11px] text-[#94A3B8]">{p.full_bottles} btl · {p.loose_pegs_30ml} pegs</div>
+                    )}
+                  </td>
                   <td>{p.low_level} / {p.critical_level}</td>
-                  <td className="space-x-1 text-right"><Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, food_type: p.food_type ?? '', min_stock: p.min_stock ?? '', critical_stock: p.critical_stock ?? '' }); }}>Edit</Button><Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button></td>
+                  <td className="space-x-1 text-right"><Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, sub_category: p.sub_category ?? '', food_type: p.food_type ?? '', min_stock: p.min_stock ?? '', critical_stock: p.critical_stock ?? '' }); }}>Edit</Button><Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button></td>
                 </tr>
               ))}
             </tbody>
@@ -104,7 +118,26 @@ export default function Products() {
         {ed && (
           <form onSubmit={save} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Product name"><Input value={ed.name} onChange={(e) => setEd({ ...ed, name: e.target.value })} required /></Field>
-            <Field label="Category"><Select value={ed.category_id || ''} onChange={(e) => setEd({ ...ed, category_id: e.target.value })}>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+            <Field label="Category"><Select value={ed.category_id || ''} onChange={(e) => setEd({ ...ed, category_id: e.target.value, sub_category: '' })}>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+            {(() => {
+              const cName = (cats.find((c) => String(c.id) === String(ed.category_id))?.name || '').toLowerCase();
+              const opts = SUB_OPTIONS[cName];
+              if (!opts) return null;
+              return (
+                <Field label="Sub-Category">
+                  <Select
+                    value={ed.sub_category || ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setEd({ ...ed, sub_category: v, food_type: v === 'Veg' ? 'veg' : v === 'Non-Veg' ? 'nonveg' : v === 'Packed' ? '' : ed.food_type });
+                    }}
+                  >
+                    <option value="">Select sub-category…</option>
+                    {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </Select>
+                </Field>
+              );
+            })()}
             <Field label="Brand"><Input value={ed.brand || ''} onChange={(e) => setEd({ ...ed, brand: e.target.value })} /></Field>
             <Field label="Food Type (Kitchen Veg / Non-Veg)">
               <Select value={ed.food_type || ''} onChange={(e) => setEd({ ...ed, food_type: e.target.value })}>

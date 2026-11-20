@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, subscribe } from '../lib/api';
-import { useApp } from '../lib/app';
+import { useApp, isAdminRole, isStaffRole } from '../lib/app';
 import { Badge, Button, Card, DateRange, Empty, Field, Input, Modal, Textarea, cx, daysAgo, fmtDate, today } from '../components/ui';
 
 const ACTIVE = ['draft', 'placed', 'accepted', 'preparing', 'served'];
@@ -87,7 +87,7 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
               {o.events?.map((e: any) => <li key={e.id}>{fmtDate(e.at)} · {e.from_status ? `${e.from_status} → ` : ''}<b>{e.to_status}</b> · {e.user_name || 'system'}{e.note ? ` · ${e.note}` : ''}</li>)}
             </ul>
           </div>
-          {['admin', 'bartender'].includes(user!.role) && (
+          {isStaffRole(user?.role) && (
             <div className="space-y-3 border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
               {isGuestOrder && o.status === 'served' && (
                 <div className="space-y-2 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
@@ -103,8 +103,8 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
               <div className="flex flex-wrap gap-2">
                 {NEXT[o.status] && <Button onClick={() => act(NEXT[o.status][0])}>{isGuestOrder && o.status === 'served' ? 'Checkout & Close' : NEXT[o.status][1]}</Button>}
                 {ACTIVE.includes(o.status) && o.status !== 'served' && o.status !== 'preparing' && <Button variant="success" onClick={() => act('served')}>Serve now</Button>}
-                {o.status === 'disputed' && user!.role === 'admin' && <Button variant="success" onClick={() => act('closed')}>Resolve dispute</Button>}
-                {(ACTIVE.includes(o.status) && (o.status !== 'served' || user!.role === 'admin')) && <Button variant="danger" onClick={() => act('cancelled')}>Cancel order</Button>}
+                {o.status === 'disputed' && isAdminRole(user?.role) && <Button variant="success" onClick={() => act('closed')}>Resolve dispute</Button>}
+                {(ACTIVE.includes(o.status) && (o.status !== 'served' || isAdminRole(user?.role))) && <Button variant="danger" onClick={() => act('cancelled')}>Cancel order</Button>}
               </div>
             </div>
           )}

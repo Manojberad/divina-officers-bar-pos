@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { useApp, type Role } from './lib/app';
+import { useApp, type Role, ADMIN_ROLES, isAdminRole } from './lib/app';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import POS from './pages/POS';
@@ -20,11 +20,12 @@ function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const { user, ready } = useApp();
   if (!ready) return <div className="p-10 text-center">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
-  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
+  const expanded = roles ? roles.flatMap((r) => (r === 'admin' ? ADMIN_ROLES : [r])) : null;
+  if (expanded && !expanded.includes(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
-export const homeFor = (r?: Role) => (r === 'admin' ? '/dashboard' : r === 'bartender' ? '/pos' : '/order');
+export const homeFor = (r?: Role) => (isAdminRole(r) ? '/dashboard' : r === 'bartender' ? '/pos' : '/order');
 
 export default function App() {
   const { user } = useApp();
@@ -36,7 +37,7 @@ export default function App() {
         <Route path="/" element={<Navigate to={homeFor(user?.role)} replace />} />
         <Route path="/pos" element={<Guard roles={['admin', 'bartender']}><POS mode="staff" /></Guard>} />
         <Route path="/orders" element={<Guard roles={['admin', 'bartender']}><OrdersBoard /></Guard>} />
-        <Route path="/order" element={<Guard roles={['member', 'customer', 'guest']}><POS mode="self" /></Guard>} />
+        <Route path="/order" element={<Guard roles={['admin', 'member', 'customer', 'guest']}><POS mode="self" /></Guard>} />
         <Route path="/my-orders" element={<MyOrders />} />
         <Route path="/account" element={<Account />} />
         <Route path="/dashboard" element={<Guard roles={['admin']}><Dashboard /></Guard>} />

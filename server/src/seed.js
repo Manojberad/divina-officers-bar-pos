@@ -20,35 +20,34 @@ const svg = (label, color, kind) => {
 const CATS = [
   ['Alcohol', 3, 1],
   ['Soft Drinks', 24, 10],
-  ['Packaged Snacks', 10, 4],
-  ['From the Kitchen', 10, 4],
+  ['Food', 10, 4],
 ];
-// name, cat, brand, size, unit, is_peg, purchase, selling(bottle/unit), peg_price(30ml), stock(bottles/units), color, kind, desc
+// name, cat, sub_category, brand, size, unit, is_peg, purchase, selling(bottle/unit), peg_price(30ml), stock(bottles/units), color, kind, desc
 const PRODUCTS = [
-  ['Royal Oak Reserve', 'Alcohol', 'Royal Oak', 750, 'bottle', 1, 900, 1400, 70, 12, '#b45309', 'bottle', 'Smooth blended whisky'],
-  ['Highland Single Malt 12Y', 'Alcohol', 'Highland', 750, 'bottle', 1, 3200, 4500, 220, 4, '#92400e', 'bottle', 'Aged 12 years, honeyed finish'],
-  ['Blenders Choice', 'Alcohol', 'Blenders', 750, 'bottle', 1, 750, 1100, 55, 2, '#a16207', 'bottle', 'Everyday blended whisky'],
-  ['Old Navy XXX Rum', 'Alcohol', 'Old Navy', 750, 'bottle', 1, 450, 700, 35, 15, '#7c2d12', 'bottle', 'Dark rum, classic'],
-  ['Coconut White Rum', 'Alcohol', 'Island', 750, 'bottle', 1, 600, 950, 45, 1, '#e5e7eb', 'bottle', 'Light rum with coconut notes'],
-  ['Arctic Vodka', 'Alcohol', 'Arctic', 750, 'bottle', 1, 700, 1100, 55, 8, '#93c5fd', 'bottle', 'Triple distilled vodka'],
-  ['Citrus Vodka', 'Alcohol', 'Arctic', 750, 'bottle', 1, 750, 1150, 58, 0, '#fde047', 'bottle', 'Lemon infused vodka'],
-  ['London Dry Gin', 'Alcohol', 'Kingsway', 750, 'bottle', 1, 900, 1400, 70, 6, '#a7f3d0', 'bottle', 'Juniper forward dry gin'],
-  ['Premium Lager 650ml', 'Alcohol', 'Brewhouse', 650, 'bottle', 0, 110, 180, 0, 96, '#facc15', 'bottle', 'Crisp lager'],
-  ['Strong Beer 500ml Can', 'Alcohol', 'Brewhouse', 500, 'can', 0, 95, 160, 0, 20, '#ef4444', 'can', '8% strong beer'],
-  ['Wheat Beer 330ml', 'Alcohol', 'Bavaria', 330, 'bottle', 0, 120, 200, 0, 48, '#fb923c', 'bottle', 'Cloudy wheat ale'],
-  ['Red Wine Shiraz', 'Alcohol', 'Valley', 750, 'bottle', 1, 800, 1300, 90, 5, '#7f1d1d', 'bottle', 'Full bodied shiraz (glass = 30ml multiples)'],
-  ['White Wine Chenin', 'Alcohol', 'Valley', 750, 'bottle', 1, 750, 1200, 85, 2, '#fef08a', 'bottle', 'Crisp chenin blanc'],
-  ['Cola 300ml', 'Soft Drinks', 'Fizz', 300, 'unit', 0, 20, 40, 0, 120, '#991b1b', 'can', 'Chilled cola'],
-  ['Soda 750ml', 'Soft Drinks', 'Fizz', 750, 'unit', 0, 18, 35, 0, 80, '#d1d5db', 'bottle', 'Club soda'],
-  ['Tonic Water', 'Soft Drinks', 'Fizz', 300, 'unit', 0, 35, 60, 0, 9, '#cffafe', 'can', 'Indian tonic water'],
-  ['Mineral Water 1L', 'Soft Drinks', 'Pure', 1000, 'unit', 0, 15, 30, 0, 60, '#60a5fa', 'bottle', 'Packaged drinking water'],
-  ['Roasted Peanuts', 'Packaged Snacks', 'House', 0, 'packet', 0, 30, 80, 0, 40, '#d97706', 'snack', 'Salted & masala peanuts'],
-  ['Chicken Tikka', 'From the Kitchen', 'Kitchen', 0, 'plate', 0, 120, 250, 0, 25, '#dc2626', 'snack', '6 pieces, mint chutney'],
-  ['French Fries', 'From the Kitchen', 'Kitchen', 0, 'plate', 0, 40, 120, 0, 3, '#fbbf24', 'snack', 'Salted fries'],
+  ['Royal Oak Reserve', 'Alcohol', 'Whisky', 'Royal Oak', 750, 'bottle', 1, 900, 1400, 70, 12, '#b45309', 'bottle', 'Smooth blended whisky'],
+  ['Highland Single Malt 12Y', 'Alcohol', 'Whisky', 'Highland', 750, 'bottle', 1, 3200, 4500, 220, 4, '#92400e', 'bottle', 'Aged 12 years, honeyed finish'],
+  ['Blenders Choice', 'Alcohol', 'Whisky', 'Blenders', 750, 'bottle', 1, 750, 1100, 55, 2, '#a16207', 'bottle', 'Everyday blended whisky'],
+  ['Old Navy XXX Rum', 'Alcohol', 'Rum', 'Old Navy', 750, 'bottle', 1, 450, 700, 35, 15, '#7c2d12', 'bottle', 'Dark rum, classic'],
+  ['Coconut White Rum', 'Alcohol', 'Rum', 'Island', 750, 'bottle', 1, 600, 950, 45, 1, '#e5e7eb', 'bottle', 'Light rum with coconut notes'],
+  ['Arctic Vodka', 'Alcohol', 'Vodka', 'Arctic', 750, 'bottle', 1, 700, 1100, 55, 8, '#93c5fd', 'bottle', 'Triple distilled vodka'],
+  ['Citrus Vodka', 'Alcohol', 'Vodka', 'Arctic', 750, 'bottle', 1, 750, 1150, 58, 0, '#fde047', 'bottle', 'Lemon infused vodka'],
+  ['London Dry Gin', 'Alcohol', 'Gin', 'Kingsway', 750, 'bottle', 1, 900, 1400, 70, 6, '#a7f3d0', 'bottle', 'Juniper forward dry gin'],
+  ['Premium Lager 650ml', 'Alcohol', 'Beer', 'Brewhouse', 650, 'bottle', 0, 110, 180, 0, 96, '#facc15', 'bottle', 'Crisp lager'],
+  ['Strong Beer 500ml Can', 'Alcohol', 'Beer', 'Brewhouse', 500, 'can', 0, 95, 160, 0, 20, '#ef4444', 'can', '8% strong beer'],
+  ['Wheat Beer 330ml', 'Alcohol', 'Beer', 'Bavaria', 330, 'bottle', 0, 120, 200, 0, 48, '#fb923c', 'bottle', 'Cloudy wheat ale'],
+  ['Red Wine Shiraz', 'Alcohol', 'Wine', 'Valley', 750, 'bottle', 1, 800, 1300, 90, 5, '#7f1d1d', 'bottle', 'Full bodied shiraz (glass = 30ml multiples)'],
+  ['White Wine Chenin', 'Alcohol', 'Wine', 'Valley', 750, 'bottle', 1, 750, 1200, 85, 2, '#fef08a', 'bottle', 'Crisp chenin blanc'],
+  ['Cola 300ml', 'Soft Drinks', null, 'Fizz', 300, 'unit', 0, 20, 40, 0, 120, '#991b1b', 'can', 'Chilled cola'],
+  ['Soda 750ml', 'Soft Drinks', null, 'Fizz', 750, 'unit', 0, 18, 35, 0, 80, '#d1d5db', 'bottle', 'Club soda'],
+  ['Tonic Water', 'Soft Drinks', null, 'Fizz', 300, 'unit', 0, 35, 60, 0, 9, '#cffafe', 'can', 'Indian tonic water'],
+  ['Mineral Water 1L', 'Soft Drinks', null, 'Pure', 1000, 'unit', 0, 15, 30, 0, 60, '#60a5fa', 'bottle', 'Packaged drinking water'],
+  ['Roasted Peanuts', 'Food', 'Packed', 'House', 0, 'packet', 0, 30, 80, 0, 40, '#d97706', 'snack', 'Salted & masala peanuts'],
+  ['Chicken Tikka', 'Food', 'Non-Veg', 'Kitchen', 0, 'plate', 0, 120, 250, 0, 25, '#dc2626', 'snack', '6 pieces, mint chutney'],
+  ['French Fries', 'Food', 'Veg', 'Kitchen', 0, 'plate', 0, 40, 120, 0, 3, '#fbbf24', 'snack', 'Salted fries'],
 ];
 
 const USERS = [
-  ['Administrator', 'ADMIN', 'Admin', '9000000000', 'admin@bar.local', 'POSTED', 'admin'],
+  ['Administrator', 'ADMIN', 'Super Admin', '9000000000', 'admin@bar.local', 'STAFF', 'superadmin'],
   ['Ravi Kumar', 'BT001', 'Bartender', '9000000001', '', 'STAFF', 'bartender'],
   ['Lt Col A. Sharma', 'IC-51234', 'Lt Col', '9811111111', 'sharma@mail.local', 'POSTED', 'member'],
   ['Maj R. Singh', 'IC-62345', 'Maj', '9822222222', 'singh@mail.local', 'POSTED', 'member'],
@@ -72,7 +71,7 @@ export function seed({ withOrders = true } = {}) {
   const backdate = (d) => new Date(Date.now() - d * 86400e3).toISOString();
   const admin = { id: ids.ADMIN, role: 'admin', name: 'Administrator' };
   const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../assets/products');
-  for (const [name, cat, brand, size, unit, peg, pp, sp, pegp, stock, color, kind, desc] of PRODUCTS) {
+  for (const [name, cat, subCat, brand, size, unit, peg, pp, sp, pegp, stock, color, kind, desc] of PRODUCTS) {
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const jpgName = `prod-${slug}.jpg`;
     const jpgAsset = path.join(ASSETS_DIR, jpgName);
@@ -86,9 +85,9 @@ export function seed({ withOrders = true } = {}) {
       fs.writeFileSync(path.join(UPLOAD_DIR, file), svg(label, color, kind));
     }
     const catId = q.get('SELECT id FROM categories WHERE name=?', cat).id;
-    const foodType = cat === 'From the Kitchen' ? (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(name) ? 'nonveg' : 'veg') : null;
-    const id = Number(q.run(`INSERT INTO products(name, category_id, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, food_type, favourite)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, name, catId, brand, desc, `/uploads/${file}`, size, unit, peg, pp, sp, pegp, foodType, ['Royal Oak Reserve', 'Premium Lager 650ml', 'Old Navy XXX Rum', 'Cola 300ml'].includes(name) ? 1 : 0).lastInsertRowid);
+    const foodType = subCat === 'Non-Veg' ? 'nonveg' : subCat === 'Veg' ? 'veg' : null;
+    const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, food_type, favourite)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, name, catId, subCat, brand, desc, `/uploads/${file}`, size, unit, peg, pp, sp, pegp, foodType, ['Royal Oak Reserve', 'Premium Lager 650ml', 'Old Navy XXX Rum', 'Cola 300ml'].includes(name) ? 1 : 0).lastInsertRowid);
     const p = getProduct(id);
     // Opening + purchase history so the dashboard has data. Extra stock is consumed by sample orders (keep 0/1/2-stock demo items intact).
     const extra = withOrders && stock > 3 ? (peg ? 3 : unit === 'plate' ? 15 : 24) : 0;

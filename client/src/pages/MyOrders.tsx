@@ -5,14 +5,14 @@ import { Badge, Button, Card, Empty, Modal, Textarea, fmtDate } from '../compone
 import { itemLabel } from './OrdersBoard';
 
 export default function MyOrders() {
-  const { money, toast, settings } = useApp();
+  const { user, money, toast, settings } = useApp();
   const [orders, setOrders] = useState<any[]>([]);
   const [dispute, setDispute] = useState<any>(null);
   const [note, setNote] = useState('');
   const hours = Number(settings.approval_hours || 24);
 
-  const load = () => api('/orders?limit=100').then(setOrders).catch(() => {});
-  useEffect(() => { load(); return subscribe((ev) => ev === 'order' && load()); }, []);
+  const load = () => api(`/orders?limit=100${user ? `&user_id=${user.id}` : ''}`).then(setOrders).catch(() => {});
+  useEffect(() => { load(); return subscribe((ev) => ev === 'order' && load()); }, [user?.id]);
 
   const approve = async (o: any) => {
     try { await api(`/orders/${o.id}/approve`, { method: 'POST' }); toast('Order approved'); load(); } catch (e: any) { toast(e.message, 'error'); }

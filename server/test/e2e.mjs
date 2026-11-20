@@ -58,18 +58,57 @@ assert.equal(ext.status, 200);
 assert.equal(ext.data.active, 1);
 assert(await login('TD-2001', '9988'), 'Extended TD officer logs in with assigned PIN');
 
-// Excel import
+// Excel import (also strips trailing alphabetic suffix like 27415-T -> 27415 & supports COURSE)
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
   { Name: 'Maj Excel One', 'Service Number': 'IC-70001', Rank: 'Maj', Mobile: '9999911111', Email: 'e1@bar.local', Category: 'POSTED', Role: 'member' },
+  { Name: 'Fg Offr Course One', 'Service Number': '40999-B', Rank: 'Fg Offr', Branch: 'AE(L)', 'List Type': 'Posted Course Officers' },
   { Name: 'Maj Excel Dup', 'Service Number': 'IC-51234', Rank: 'Maj' },
 ]), 'Officers');
 const fd = new FormData();
 fd.append('file', new Blob([XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })]), 'officers.xlsx');
 const imp = await req('/api/users/import', { method: 'POST', token: adminTok, body: fd });
-assert.equal(imp.data.created, 1);
+assert.equal(imp.data.created, 2);
 assert.equal(imp.data.skipped.length, 1);
 assert(await login('IC-70001', 'IC-70001'), 'Imported Posted-In officer logs in with Service No as PIN');
+const courseTok = await login('40999', '40999');
+assert(courseTok, 'Course officer suffix stripped (40999-B -> 40999) & logs in');
+const courseMe = (await req('/api/auth/me', { token: courseTok })).data;
+assert.equal(courseMe.category, 'COURSE');
+assert.equal(courseMe.role, 'member');
+assert.equal(courseMe.branch, 'AE(L)');
+
+console.log('2b. Super Admin role assignment & 3 Admin-equivalent officer designations…');
+const allUsers = (await req('/api/users', { token: adminTok })).data;
+const off1 = allUsers.find((u) => u.service_no === 'IC-62345');
+const off2 = allUsers.find((u) => u.service_no === 'SS-41234');
+const off3 = allUsers.find((u) => u.service_no === 'IC-40001');
+const coAssign = await req(`/api/users/${off1.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'commanding_officer' } });
+assert.equal(coAssign.status, 200);
+assert.equal(coAssign.data.designation, 'Commanding Officer');
+const msAssign = await req(`/api/users/${off2.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'mess_secretary' } });
+assert.equal(msAssign.status, 200);
+assert.equal(msAssign.data.designation, 'Mess Secretary');
+const biAssign = await req(`/api/users/${off3.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'bar_incharge' } });
+assert.equal(biAssign.status, 200);
+assert.equal(biAssign.data.designation, 'Bar Incharge');
+// All 3 can sign in on EITHER Member tab or Admin tab and get full Admin rights + official designation
+const coLogin = await req('/api/auth/login', { method: 'POST', body: { service_no: 'IC-62345', pin: 'IC-62345', mode: 'member' } });
+assert.equal(coLogin.status, 200);
+assert.equal(coLogin.data.user.designation, 'Commanding Officer');
+const coTok = coLogin.data.token;
+assert.equal((await req('/api/auth/login', { method: 'POST', body: { service_no: 'SS-41234', pin: 'SS-41234', mode: 'admin' } })).status, 200, 'Mess Secretary logs in on Admin tab');
+const biTok = await login('IC-40001');
+assert.equal((await req('/api/dashboard', { token: coTok })).status, 200, 'Commanding Officer accesses Dashboard');
+assert.equal((await req('/api/reports/types', { token: biTok })).status, 200, 'Bar Incharge accesses Reports');
+assert.equal((await req('/api/users', { token: coTok })).status, 200, 'Commanding Officer views Users');
+// Non-SuperAdmin privileged officer CANNOT assign privileged roles or edit Super Admin
+assert.equal((await req(`/api/users/${off3.id}/assign-role`, { method: 'POST', token: coTok, body: { role: 'member' } })).status, 403, 'CO cannot assign privileged roles');
+assert.equal((await req('/api/users/1', { method: 'PUT', token: coTok, body: { name: 'Hacked' } })).status, 403, 'CO cannot modify Super Admin');
+// Revert test officers back to member via Super Admin so subsequent tests stay clean
+await req(`/api/users/${off1.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'member' } });
+await req(`/api/users/${off2.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'member' } });
+await req(`/api/users/${off3.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'member' } });
 
 console.log('3. POS, offline client_uuid deduplication, peg & bottle inventory deduction, reversal…');
 const whisky = (await req('/api/products/1', { token: btTok })).data;
@@ -215,7 +254,7 @@ const pTpl = await req('/api/products/template', { token: adminTok, raw: true })
 assert.equal(pTpl.status, 200, 'Products Excel template downloadable');
 const pwb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(pwb, XLSX.utils.json_to_sheet([
-  { Name: 'Paneer Tikka', Category: 'From the Kitchen', 'Food Type': 'Veg', Unit: 'plate', 'Is Peg': 'No', 'Purchase Price': 100, 'Selling Price': 220, 'Opening Stock': 10 },
+  { Name: 'Paneer Tikka', Category: 'Food', 'Sub Category': 'Veg', 'Food Type': 'Veg', Unit: 'plate', 'Is Peg': 'No', 'Purchase Price': 100, 'Selling Price': 220, 'Opening Stock': 10 },
   { Name: 'Filter Coffee', Category: 'Hot Beverages', Unit: 'cup', 'Is Peg': 'No', 'Purchase Price': 20, 'Selling Price': 50, 'Opening Stock': 25 },
 ]), 'Products');
 const pfd = new FormData();

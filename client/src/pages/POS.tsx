@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, placeOrder } from '../lib/api';
-import { useApp } from '../lib/app';
+import { useApp, isStaffRole } from '../lib/app';
 import { Button, Field, Input, Modal, Select, StockDot, Textarea, cx } from '../components/ui';
 
 export interface Product {
-  id: number; name: string; category: string; category_id: number; brand?: string; description?: string; image?: string; size_ml: number; unit: string;
+  id: number; name: string; category: string; category_id: number; sub_category?: string | null; brand?: string; description?: string; image?: string; size_ml: number; unit: string;
   is_peg: boolean; food_type?: 'veg' | 'nonveg' | null; selling_price: number; peg_price: number; favourite: boolean; available?: boolean; stock_status?: string; stock_display?: number; stock_unit?: string;
+  full_bottles?: number; loose_pegs_30ml?: number;
 }
+
+const ALCOHOL_SUB_ORDER = ['Whisky', 'Rum', 'Vodka', 'Gin', 'Brandy', 'Wine', 'Beer'];
+const FOOD_SUB_ORDER = ['Packed', 'Veg', 'Non-Veg'];
 
 const VegMark = ({ type }: { type?: 'veg' | 'nonveg' | null }) =>
   type === 'veg' ? (
@@ -24,11 +28,11 @@ const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${
 
 export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void }) {
   const { user, money, toast, reloadUser } = useApp();
-  const staff = mode === 'staff' || (user != null && ['admin', 'bartender'].includes(user.role));
+  const staff = mode === 'staff' || (mode !== 'self' && isStaffRole(user?.role));
   const [products, setProducts] = useState<Product[]>(preload?.products || []);
   const [categories, setCategories] = useState<any[]>(preload?.categories || []);
-  const [cat, setCat] = useState<number | 'fav' | null>(null);
-  const [kitchenFilter, setKitchenFilter] = useState<'all' | 'veg' | 'nonveg'>('all');
+  const [cat, setCat] = useState<number | 'fav'>('fav');
+  const [subCat, setSubCat] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Line[]>(() => JSON.parse(localStorage.getItem(`cart-${mode}`) || '[]'));
   const [picker, setPicker] = useState<Product | null>(null);
@@ -50,20 +54,47 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   useEffect(() => { if (preload) { setProducts(preload.products); setCategories(preload.categories); } }, [preload]);
   useEffect(() => { localStorage.setItem(`cart-${mode}`, JSON.stringify(cart)); }, [cart, mode]);
 
-  const activeCatObj = categories.find((c) => c.id === cat);
-  const isKitchenCat = /kitchen/i.test(activeCatObj?.name || '');
+  const activeCatObj = typeof cat === 'number' ? categories.find((c) => c.id === cat) : null;
+  const activeCatName = (activeCatObj?.name || '').toLowerCase();
+  const isAlcoholCat = activeCatName === 'alcohol';
+  const isFoodCat = activeCatName === 'food' || /kitchen/i.test(activeCatName);
+  const isSoftDrinksCat = /soft\s*drink/i.test(activeCatName);
+
+  const resolveFoodSub = (p: Product) => {
+    if (p.sub_category && FOOD_SUB_ORDER.includes(p.sub_category)) return p.sub_category;
+    if (p.food_type === 'nonveg') return 'Non-Veg';
+    if (p.food_type === 'veg') return 'Veg';
+    return 'Packed';
+  };
+
+  // Dynamic Alcohol sub-categories present in inventory (ordered cleanly)
+  const alcoholSubs = useMemo(() => {
+    if (!isAlcoholCat) return [];
+    const set = new Set<string>();
+    products.filter((p) => p.category_id === cat).forEach((p) => { if (p.sub_category) set.add(p.sub_category); });
+    return [
+      ...ALCOHOL_SUB_ORDER.filter((s) => set.has(s)),
+      ...[...set].filter((s) => !ALCOHOL_SUB_ORDER.includes(s)).sort(),
+    ];
+  }, [products, cat, isAlcoholCat]);
 
   const shown = useMemo(() => {
     const s = search.trim().toLowerCase();
     return products.filter((p) => {
-      if (cat === 'fav' ? !p.favourite : cat ? p.category_id !== cat : false) return false;
-      if (isKitchenCat && kitchenFilter !== 'all') {
-        const ft = p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg');
-        if (ft !== kitchenFilter) return false;
+      if (s) {
+        return `${p.name} ${p.brand || ''} ${p.category || ''} ${p.sub_category || ''}`.toLowerCase().includes(s);
       }
-      return !s || `${p.name} ${p.brand} ${p.category}`.toLowerCase().includes(s);
+      if (cat === 'fav') return !!p.favourite;
+      if (p.category_id !== cat) return false;
+      if (isAlcoholCat && subCat !== 'all') {
+        if ((p.sub_category || '') !== subCat) return false;
+      }
+      if (isFoodCat && subCat !== 'all') {
+        if (resolveFoodSub(p) !== subCat) return false;
+      }
+      return true;
     });
-  }, [products, cat, isKitchenCat, kitchenFilter, search]);
+  }, [products, cat, subCat, isAlcoholCat, isFoodCat, search]);
 
   const add = (p: Product, serve: Line['serve_type'], peg_ml?: number) => {
     const unit_price = serve === 'peg' ? Math.round((p.peg_price * (peg_ml || 30)) / 30 * 100) / 100 : p.selling_price;
@@ -202,17 +233,17 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             )}
           </div>
         )}
-        {/* Search & Pill Category Bar */}
-        <div className="mb-3 space-y-3">
-          <Input placeholder="🔍  Search drinks, brands or snacks…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        {/* Search & Pill Category Bar (Favorites + 3 Main Categories: Alcohol, Soft Drinks, Food) */}
+        <div className="mb-3 space-y-2.5">
+          <Input placeholder="🔍  Search whisky, rum, wine, beer, soft drinks or food…" value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="no-scrollbar flex gap-2.5 overflow-x-auto pb-1">
-            {[{ id: null, name: 'All' }, ...categories].map((c: any) => (
+            {[{ id: 'fav' as const, name: '⭐ Favorites' }, ...categories].map((c: any) => (
               <button
                 key={String(c.id)}
-                onClick={() => { setCat(c.id); setKitchenFilter('all'); }}
+                onClick={() => { setCat(c.id); setSubCat('all'); setSearch(''); }}
                 className={cx(
                   'whitespace-nowrap rounded-full px-5 py-2 text-sm font-bold transition-all',
-                  cat === c.id
+                  cat === c.id && !search.trim()
                     ? 'bg-[#422AFB] text-white shadow-[0_6px_16px_rgba(99,102,241,0.28)] dark:bg-[#6366F1]'
                     : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]',
                 )}
@@ -221,25 +252,63 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
               </button>
             ))}
           </div>
-          {isKitchenCat && (
+
+          {/* Alcohol Sub-Categories (Whisky, Rum, Vodka, Gin, Brandy, Wine, Beer) */}
+          {!search.trim() && isAlcoholCat && alcoholSubs.length > 0 && (
+            <div className="no-scrollbar flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setSubCat('all')}
+                className={cx(
+                  'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                  subCat === 'all'
+                    ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                    : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                )}
+              >
+                All Alcohol ({products.filter((p) => p.category_id === cat).length})
+              </button>
+              {alcoholSubs.map((sc) => {
+                const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
+                return (
+                  <button
+                    key={sc}
+                    onClick={() => setSubCat(sc)}
+                    className={cx(
+                      'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                      subCat === sc
+                        ? 'bg-[#D97706] text-white shadow-sm'
+                        : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                    )}
+                  >
+                    {sc} ({cnt})
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Food Sub-Categories (Packed, Veg, Non-Veg) — Soft Drinks has no sub-categories */}
+          {!search.trim() && isFoodCat && !isSoftDrinksCat && (
             <div className="flex flex-wrap items-center gap-2">
-              {([['all', 'All Kitchen'], ['veg', 'Veg'], ['nonveg', 'Non-Veg']] as const).map(([k, label]) => (
+              {([['all', 'All Food'], ['Packed', '📦 Packed'], ['Veg', 'Veg'], ['Non-Veg', 'Non-Veg']] as const).map(([k, label]) => (
                 <button
                   key={k}
-                  onClick={() => setKitchenFilter(k)}
+                  onClick={() => setSubCat(k)}
                   className={cx(
                     'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition',
-                    kitchenFilter === k
-                      ? k === 'veg'
+                    subCat === k
+                      ? k === 'Veg'
                         ? 'bg-emerald-600 text-white shadow-sm'
-                        : k === 'nonveg'
+                        : k === 'Non-Veg'
                           ? 'bg-red-600 text-white shadow-sm'
-                          : 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                          : k === 'Packed'
+                            ? 'bg-[#D97706] text-white shadow-sm'
+                            : 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
                       : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
                   )}
                 >
-                  {k === 'veg' && <VegMark type="veg" />}
-                  {k === 'nonveg' && <VegMark type="nonveg" />}
+                  {k === 'Veg' && <VegMark type="veg" />}
+                  {k === 'Non-Veg' && <VegMark type="nonveg" />}
                   <span>{label}</span>
                 </button>
               ))}
@@ -247,16 +316,24 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
           )}
         </div>
 
-        {/* Product Cards Grid (grouped into Veg & Non-Veg sections inside From the Kitchen) */}
+        {/* Product Cards Grid */}
         <div className="min-h-0 flex-1 overflow-auto pb-4">
           {(() => {
             const renderCard = (p: Product) => {
-              const ft = p.food_type || (/kitchen/i.test(p.category || '') ? (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg') : null);
+              const ft = p.sub_category === 'Non-Veg' || p.food_type === 'nonveg'
+                ? 'nonveg'
+                : p.sub_category === 'Veg' || p.food_type === 'veg'
+                  ? 'veg'
+                  : null;
+              const stockTitle = p.is_peg && p.full_bottles != null
+                ? `${p.full_bottles} full btl + ${p.loose_pegs_30ml ?? 0} loose 30ml pegs`
+                : undefined;
               return (
                 <div
                   key={p.id}
                   onClick={() => tap(p)}
                   role="button"
+                  title={stockTitle}
                   className={cx(
                     'horizon-shadow group relative cursor-pointer overflow-hidden rounded-[20px] border border-transparent bg-white p-3 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230]',
                     isOut(p) && 'opacity-50',
@@ -264,7 +341,14 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                 >
                   <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-[#F4F7FE] dark:bg-[#252D3D]">
                     {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center text-4xl">🍹</div>}
-                    {ft && <span className="absolute left-2.5 top-2.5 shadow-sm"><VegMark type={ft} /></span>}
+                    <div className="absolute left-2.5 top-2.5 flex items-center gap-1.5">
+                      {ft && <span className="shadow-sm"><VegMark type={ft} /></span>}
+                      {p.sub_category && !ft && (
+                        <span className="rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur-xs">
+                          {p.sub_category}
+                        </span>
+                      )}
+                    </div>
                     {staff && (
                       <button
                         onClick={(e) => { e.stopPropagation(); toggleFav(p); }}
@@ -277,12 +361,17 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                   <div className="mt-3 px-0.5">
                     <div className="truncate text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{p.name}</div>
                     <div className="mt-0.5 truncate text-xs font-medium text-[#94A3B8]">
-                      {p.is_peg ? `Small (30 ml) ${money(p.peg_price)} · Large (60 ml) ${money(p.peg_price * 2)}` : p.description || p.category}
+                      {p.is_peg ? `30 ml ${money(p.peg_price)} · 60 ml ${money(Math.round(p.peg_price * 2 * 100) / 100)}` : p.description || p.category}
                     </div>
-                    <div className="mt-2.5 flex items-center justify-between">
-                      <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
-                        {p.is_peg && !staff ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
-                      </span>
+                    <div className="mt-2.5 flex items-center justify-between gap-1">
+                      <div className="min-w-0">
+                        <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                          {p.is_peg ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
+                        </span>
+                        {p.is_peg && staff && (
+                          <div className="text-[10px] font-semibold text-[#94A3B8]">Btl: {money(p.selling_price)}</div>
+                        )}
+                      </div>
                       {p.stock_status ? <StockDot s={p.stock_status} label={`${p.stock_display}`} /> : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
                     </div>
                   </div>
@@ -290,18 +379,28 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
               );
             };
 
-            if (isKitchenCat && kitchenFilter === 'all') {
-              const vegItems = shown.filter((p) => (p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg')) === 'veg');
-              const nonVegItems = shown.filter((p) => (p.food_type || (/chicken|mutton|fish|egg|prawn|meat|lamb/i.test(p.name) ? 'nonveg' : 'veg')) === 'nonveg');
+            if (!search.trim() && isFoodCat && subCat === 'all') {
+              const packedItems = shown.filter((p) => resolveFoodSub(p) === 'Packed');
+              const vegItems = shown.filter((p) => resolveFoodSub(p) === 'Veg');
+              const nonVegItems = shown.filter((p) => resolveFoodSub(p) === 'Non-Veg');
               return (
                 <div className="space-y-5">
+                  <div>
+                    <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-[#D97706] dark:text-[#FBBF24]">
+                      <span>📦 Packed ({packedItems.length})</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                      {packedItems.map(renderCard)}
+                      {packedItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Packed items found</div>}
+                    </div>
+                  </div>
                   <div>
                     <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
                       <VegMark type="veg" /> <span>Veg ({vegItems.length})</span>
                     </div>
                     <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                       {vegItems.map(renderCard)}
-                      {vegItems.length === 0 && <div className="col-span-full py-4 text-xs text-[#94A3B8]">No Veg items found</div>}
+                      {vegItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Veg items found</div>}
                     </div>
                   </div>
                   <div>
@@ -310,7 +409,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                     </div>
                     <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                       {nonVegItems.map(renderCard)}
-                      {nonVegItems.length === 0 && <div className="col-span-full py-4 text-xs text-[#94A3B8]">No Non-Veg items found</div>}
+                      {nonVegItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Non-Veg items found</div>}
                     </div>
                   </div>
                 </div>

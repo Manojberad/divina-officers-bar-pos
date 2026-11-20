@@ -382,7 +382,7 @@ export default function Login() {
                   name="username"
                   type="text"
                   autoComplete="username"
-                  placeholder={mode === 'member' ? 'Enter Service No. (e.g. IC-51234)' : 'Enter Admin / Staff ID (e.g. ADMIN)'}
+                  placeholder={mode === 'member' ? 'Enter Service No. (e.g. 27415)' : 'Enter Admin / Officer / Staff ID'}
                   value={sn}
                   onFocus={() => setFocusedField('sn')}
                   onBlur={() => setFocusedField((f) => (f === 'sn' ? null : f))}
