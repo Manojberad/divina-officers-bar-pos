@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useApp, isAdminRole } from '../lib/app';
 import { Button, Card, DateRange, Field, Input, Modal, Select, StockDot, daysAgo, fmtDate, today } from '../components/ui';
@@ -8,6 +8,7 @@ export default function Inventory() {
   const admin = isAdminRole(user?.role);
   const [tab, setTab] = useState<'stock' | 'purchase' | 'wastage' | 'reconcile' | 'history'>('stock');
   const [products, setProducts] = useState<any[]>([]);
+  const [cats, setCats] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [recons, setRecons] = useState<any[]>([]);
   const [range, setRange] = useState([daysAgo(29), today()]);
@@ -16,8 +17,15 @@ export default function Inventory() {
   const [counts, setCounts] = useState<Record<number, string>>({});
   const [reconNote, setReconNote] = useState('');
 
+  // Search & Filters for Current Stock & Reconciliation
+  const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('ALL');
+  const [subFilter, setSubFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'instock' | 'low' | 'out'>('all');
+
   const load = () => {
     api('/products?all=1', { cache: false }).then(setProducts).catch(() => {});
+    api('/categories', { cache: false }).then(setCats).catch(() => {});
     api(`/inventory/movements?from=${range[0]}&to=${range[1]}${prodFilter ? `&product_id=${prodFilter}` : ''}`, { cache: false }).then(setMovements).catch(() => {});
     api(`/inventory/reconciliations?from=${range[0]}&to=${range[1]}`, { cache: false }).then(setRecons).catch(() => {});
   };
@@ -34,6 +42,29 @@ export default function Inventory() {
     try { await api('/inventory/reconcile', { method: 'POST', body: { items, note: reconNote } }); toast('Reconciled'); setCounts({}); setReconNote(''); load(); } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const availableSubs = useMemo(() => {
+    const list = catFilter === 'ALL' ? products : products.filter((p) => String(p.category_id) === catFilter);
+    return [...new Set(list.map((p) => p.sub_category).filter(Boolean))].sort();
+  }, [products, catFilter]);
+
+  const filteredProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter((p) => {
+      if (catFilter !== 'ALL' && String(p.category_id) !== catFilter) return false;
+      if (subFilter !== 'ALL' && (p.sub_category || '') !== subFilter) return false;
+      if (statusFilter === 'instock' && p.stock_status === 'out') return false;
+      if (statusFilter === 'low' && !['low', 'critical'].includes(p.stock_status)) return false;
+      if (statusFilter === 'out' && p.stock_status !== 'out') return false;
+      if (!q) return true;
+      return `${p.name} ${p.category || ''} ${p.sub_category || ''} ${p.brand || ''}`.toLowerCase().includes(q);
+    });
+  }, [products, search, catFilter, subFilter, statusFilter]);
+
+  const filteredValue = useMemo(
+    () => filteredProducts.reduce((s, p) => s + (Number(p.stock_value) || 0), 0),
+    [filteredProducts],
+  );
+
   const selProd = products.find((p) => p.id === Number(movModal?.product_id));
 
   return (
@@ -41,7 +72,9 @@ export default function Inventory() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">
           {(['stock', 'purchase', 'wastage', ...(admin ? ['reconcile'] : []), 'history'] as any[]).map((t) => (
-            <Button key={t} variant={tab === t ? 'primary' : 'subtle'} onClick={() => setTab(t)} className="capitalize">{t === 'purchase' ? 'Purchase register' : t === 'wastage' ? 'Wastage & complimentary' : t}</Button>
+            <Button key={t} variant={tab === t ? 'primary' : 'subtle'} onClick={() => setTab(t)} className="capitalize">
+              {t === 'purchase' ? 'Purchase register' : t === 'wastage' ? 'Wastage & complimentary' : t}
+            </Button>
           ))}
         </div>
         <div className="flex gap-2">
@@ -52,21 +85,94 @@ export default function Inventory() {
       </div>
 
       {tab === 'stock' && (
-        <Card title="Current stock">
+        <Card
+          title={`Current Stock (${filteredProducts.length} of ${products.length} items${admin ? ` · Value: ${money(filteredValue)}` : ''})`}
+        >
+          {/* Search & Relevant Filters */}
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Input
+              placeholder="🔍 Search product, sub-category, brand…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="!max-w-xs"
+            />
+            <Select
+              value={catFilter}
+              onChange={(e) => { setCatFilter(e.target.value); setSubFilter('ALL'); }}
+              className="!w-44 !min-h-10 !py-1.5 text-sm"
+            >
+              <option value="ALL">All Categories</option>
+              {cats.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </Select>
+            {availableSubs.length > 0 && (
+              <Select
+                value={subFilter}
+                onChange={(e) => setSubFilter(e.target.value)}
+                className="!w-40 !min-h-10 !py-1.5 text-sm"
+              >
+                <option value="ALL">All Sub-Categories</option>
+                {availableSubs.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {([
+                ['all', 'All'],
+                ['instock', 'In Stock'],
+                ['low', 'Low / Critical'],
+                ['out', 'Out of Stock'],
+              ] as const).map(([k, lbl]) => (
+                <Button key={k} size="sm" variant={statusFilter === k ? 'primary' : 'subtle'} onClick={() => setStatusFilter(k)}>
+                  {lbl}
+                </Button>
+              ))}
+            </div>
+            {(search || catFilter !== 'ALL' || subFilter !== 'ALL' || statusFilter !== 'all') && (
+              <Button size="sm" variant="ghost" onClick={() => { setSearch(''); setCatFilter('ALL'); setSubFilter('ALL'); setStatusFilter('all'); }}>
+                Clear
+              </Button>
+            )}
+          </div>
+
           <div className="overflow-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>Category</th><th>Size</th><th>Stock</th><th>Thresholds (low / crit)</th><th>Status</th>{admin && <th>Purchase</th>}<th>Selling</th>{admin && <th className="text-right">Value @Cost</th>}</tr></thead>
+              <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
+                <tr>
+                  <th className="p-2">Product</th>
+                  <th>Category / Sub</th>
+                  <th>Size / Unit</th>
+                  <th>Stock</th>
+                  <th>Status</th>
+                  {admin && <th>Purchase</th>}
+                  <th>Selling</th>
+                  {admin && <th className="text-right">Value @Cost</th>}
+                </tr>
+              </thead>
               <tbody>
-                {products.map((p) => (
-                  <tr key={p.id} className="border-t dark:border-gray-700">
-                    <td className="p-2 font-semibold">{p.name}</td><td>{p.category}</td><td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
-                    <td><b>{p.stock_display}</b> {p.stock_unit}{p.is_peg && <span className="text-xs text-gray-500"> ({Math.round(p.stock)} ml)</span>}</td>
-                    <td>{p.low_level} / {p.critical_level}</td><td><StockDot s={p.stock_status} /></td>
+                {filteredProducts.map((p) => (
+                  <tr key={p.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
+                    <td className="p-2 font-semibold">{p.name}</td>
+                    <td>
+                      <div>{p.category}</div>
+                      {p.sub_category && <div className="text-xs text-[#94A3B8]">{p.sub_category}</div>}
+                    </td>
+                    <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
+                    <td>
+                      <b>{p.stock_display}</b> {p.stock_unit}
+                      {p.is_peg && (
+                        <div className="text-xs text-[#94A3B8]">
+                          {p.full_bottles ?? 0} btl · {p.loose_pegs_30ml ?? 0} loose pegs ({Math.round(p.stock)} ml)
+                        </div>
+                      )}
+                    </td>
+                    <td><StockDot s={p.stock_status} /></td>
                     {admin && <td>{money(p.purchase_price)}</td>}
-                    <td>{money(p.selling_price)}{p.is_peg ? ` · peg ${money(p.peg_price)}` : ''}</td>
+                    <td>{money(p.selling_price)}{p.is_peg ? ` · 30ml ${money(p.peg_price)}` : ''}</td>
                     {admin && <td className="text-right font-semibold">{money(p.stock_value)}</td>}
                   </tr>
                 ))}
+                {filteredProducts.length === 0 && (
+                  <tr><td colSpan={admin ? 8 : 6} className="py-8 text-center text-sm text-[#94A3B8]">No matching stock items</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -93,11 +199,11 @@ export default function Inventory() {
       )}
 
       {tab === 'reconcile' && admin && (
-        <Card title="Physical stock reconciliation" actions={<div className="flex gap-2"><Input placeholder="Reconciliation note" value={reconNote} onChange={(e) => setReconNote(e.target.value)} className="!w-60 !min-h-9" /><Button onClick={submitRecon}>Apply reconciliation</Button></div>}>
+        <Card title="Physical stock reconciliation" actions={<div className="flex flex-wrap gap-2"><Input placeholder="🔍 Filter items…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-48 !min-h-9" /><Input placeholder="Reconciliation note" value={reconNote} onChange={(e) => setReconNote(e.target.value)} className="!w-56 !min-h-9" /><Button onClick={submitRecon}>Apply reconciliation</Button></div>}>
           <table className="w-full text-sm">
             <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>System stock</th><th>Physical count (bottles / units)</th><th>Difference</th></tr></thead>
             <tbody>
-              {products.map((p) => {
+              {filteredProducts.map((p) => {
                 const v = counts[p.id] ?? '';
                 const diff = v === '' ? null : Math.round((Number(v) - p.stock_display) * 1000) / 1000;
                 return (

@@ -110,38 +110,53 @@ await req(`/api/users/${off1.id}/assign-role`, { method: 'POST', token: adminTok
 await req(`/api/users/${off2.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'member' } });
 await req(`/api/users/${off3.id}/assign-role`, { method: 'POST', token: adminTok, body: { role: 'member' } });
 
-console.log('3. POS, offline client_uuid deduplication, peg & bottle inventory deduction, reversal…');
+console.log('3. Auto-accept/auto-bill POS, bartender edit/cancel with stock reversal, Favorite Orders & Category Profit Margins…');
 const whisky = (await req('/api/products/1', { token: btTok })).data;
 const startMl = whisky.stock;
 const uuid = 'offline-uuid-test-001';
 const o1 = await req('/api/orders', { method: 'POST', token: btTok, body: { client_uuid: uuid, user_id: 3, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 2 }] } });
 const o1Replay = await req('/api/orders', { method: 'POST', token: btTok, body: { client_uuid: uuid, user_id: 3, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 2 }] } });
 assert.equal(o1.status, 201);
+assert.equal(o1.data.status, 'closed', 'On-demand order auto-accepted & auto-billed immediately');
 assert.equal(o1Replay.status, 200);
 assert.equal(o1Replay.data.duplicate, true);
 assert.equal(o1.data.id, o1Replay.data.id, 'Offline replay did not create duplicate order');
 
 const oid = o1.data.id;
-await req(`/api/orders/${oid}/status`, { method: 'POST', token: btTok, body: { status: 'accepted' } });
-await req(`/api/orders/${oid}/status`, { method: 'POST', token: btTok, body: { status: 'preparing' } });
-assert.equal((await req('/api/products/1', { token: btTok })).data.stock, startMl, 'Stock not deducted before served');
+const afterAutoBillMl = (await req('/api/products/1', { token: btTok })).data.stock;
+assert.equal(afterAutoBillMl, startMl - 120, 'Deducted 2 x 60ml = 120ml immediately on auto-bill');
 
-await req(`/api/orders/${oid}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
-const afterServeMl = (await req('/api/products/1', { token: btTok })).data.stock;
-assert.equal(afterServeMl, startMl - 120, 'Deducted 2 x 60ml = 120ml on served');
+// Bartender edits an auto-billed order (reduces 2x60ml -> 1x30ml) -> 90ml restored atomically
+const edited = await req(`/api/orders/${oid}/items`, { method: 'PUT', token: btTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }], reason: 'Reduced qty' } });
+assert.equal(edited.status, 200);
+assert.equal((await req('/api/products/1', { token: btTok })).data.stock, startMl - 30, 'Stock adjusted cleanly on bartender order edit');
+// Restore back to 2x60ml for rest of test
+await req(`/api/orders/${oid}/items`, { method: 'PUT', token: btTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 2 }] } });
+assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterAutoBillMl);
 
-// Repeat served/closed must not deduct twice
-await req(`/api/orders/${oid}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
-await req(`/api/orders/${oid}/status`, { method: 'POST', token: btTok, body: { status: 'closed' } });
-assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterServeMl, 'No duplicate deduction on close');
-
-// Cancel a served order as admin -> stock reversed
+// Bartender cancels an auto-billed full-bottle order (e.g. item unavailable) -> stock restored automatically
 const oCancel = (await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).data;
-await req(`/api/orders/${oCancel.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
-assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterServeMl - 750);
-assert.equal((await req(`/api/orders/${oCancel.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled' } })).status, 403, 'Bartender cannot cancel served order');
-await req(`/api/orders/${oCancel.id}/status`, { method: 'POST', token: adminTok, body: { status: 'cancelled', note: 'Wrong table' } });
-assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterServeMl, 'Stock restored after admin cancelled served order');
+assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterAutoBillMl - 750);
+assert.equal((await req(`/api/orders/${oCancel.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled', note: 'Item unavailable' } })).status, 200, 'Bartender can cancel auto-billed order');
+assert.equal((await req('/api/products/1', { token: btTok })).data.stock, afterAutoBillMl, 'Stock restored after bartender cancelled order');
+
+// Member Favorite Orders (create + list + 1-tap repeat)
+const favCreate = await req('/api/orders/favorites', { method: 'POST', token: memTok, body: { name: 'My Evening Usual', items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }] } });
+assert.equal(favCreate.status, 201);
+const favList = (await req('/api/orders/favorites', { token: memTok })).data;
+assert(favList.some((f) => f.name === 'My Evening Usual' && f.live_total > 0), 'Member sees saved Favorite Order');
+const favRepeat = await req(`/api/orders/favorites/${favCreate.data.id}/reorder`, { method: 'POST', token: memTok, body: {} });
+assert.equal(favRepeat.status, 201);
+assert.equal(favRepeat.data.status, 'closed', 'Repeat Favorite Order auto-accepted & billed');
+
+// Category Profit Margin % recalculates selling & peg prices
+const catsList = (await req('/api/categories', { token: adminTok })).data;
+assert(catsList.some((c) => c.name === 'Cigarettes' && Number(c.profit_margin) === 7.5), 'Cigarettes category present with 7.5% margin');
+assert(catsList.some((c) => c.name === 'Misc'), 'Misc category present');
+const alcCat = catsList.find((c) => c.name === 'Alcohol');
+const marginUpd = await req(`/api/categories/${alcCat.id}`, { method: 'PUT', token: adminTok, body: { profit_margin: 5, apply_margin: true } });
+assert.equal(marginUpd.status, 200);
+assert(marginUpd.data.updated_products > 0, 'Alcohol profit margin applied to products');
 
 console.log('4. Customer order approval, dispute notification & 24h auto-expiry…');
 const appRes = await req(`/api/orders/${oid}/approve`, { method: 'POST', token: memTok });
@@ -149,8 +164,6 @@ assert.equal(appRes.data.approval_status, 'approved');
 
 // Dispute workflow
 const oDisp = (await req('/api/orders', { method: 'POST', token: btTok, body: { user_id: 3, items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }] } })).data;
-await req(`/api/orders/${oDisp.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
-await req(`/api/orders/${oDisp.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed' } });
 const dispRes = await req(`/api/orders/${oDisp.id}/dispute`, { method: 'POST', token: memTok, body: { note: 'Ordered 30ml, billed wrong' } });
 assert.equal(dispRes.data.status, 'disputed');
 const notes = (await req('/api/admin/notifications', { token: adminTok })).data;
@@ -161,8 +174,6 @@ assert.equal(resolved.data.approval_status, 'approved');
 
 // 24h expiry job
 const oExp = (await req('/api/orders', { method: 'POST', token: btTok, body: { user_id: 3, items: [{ product_id: 9, qty: 1 }] } })).data;
-await req(`/api/orders/${oExp.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } });
-await req(`/api/orders/${oExp.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed' } });
 q.run('UPDATE orders SET closed_at=? WHERE id=?', new Date(Date.now() - 25 * 3600e3).toISOString(), oExp.id);
 assert(expireApprovals() >= 1, 'Expired unapproved >24h order');
 assert.equal((await req(`/api/orders/${oExp.id}`, { token: memTok })).data.approval_status, 'expired');
@@ -182,9 +193,8 @@ console.log('5b. Peg policy (Small 30ml & Large 60ml only; full bottle only for 
 assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 90, qty: 1 }] } })).status, 400, '90ml peg rejected');
 assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 403, 'Member blocked from issuing full bottle');
 const multiServe = await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 }, { product_id: 1, serve_type: 'peg', peg_ml: 60, qty: 1 }] } });
-assert.equal(multiServe.status, 201, 'Member allowed Small(30ml) & Large(60ml)');
-// Serving an order containing BOTH Small(30ml) and Large(60ml) of the SAME product must aggregate stock cleanly without UNIQUE constraint error
-assert.equal((await req(`/api/orders/${multiServe.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'served' } })).status, 200, 'Serve succeeds for same product in multiple peg sizes');
+assert.equal(multiServe.status, 201, 'Member allowed Small(30ml) & Large(60ml) and auto-billed without UNIQUE constraint error');
+assert.equal(multiServe.data.status, 'closed');
 assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] } })).status, 201, 'Bartender allowed to issue full bottle');
 
 console.log('5c. Guest registration, bartender approval, admin notification & Cash/UPI checkout…');

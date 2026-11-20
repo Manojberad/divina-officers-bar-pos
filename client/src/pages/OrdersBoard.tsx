@@ -1,16 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, subscribe } from '../lib/api';
 import { useApp, isAdminRole, isStaffRole } from '../lib/app';
-import { Badge, Button, Card, DateRange, Empty, Field, Input, Modal, Textarea, cx, daysAgo, fmtDate, today } from '../components/ui';
-
-const ACTIVE = ['draft', 'placed', 'accepted', 'preparing', 'served'];
-const NEXT: Record<string, [string, string]> = {
-  draft: ['preparing', 'Move to Preparing'],
-  placed: ['preparing', 'Accept'],
-  accepted: ['preparing', 'Move to Preparing'],
-  preparing: ['served', 'Serve'],
-  served: ['closed', 'Close'],
-};
+import { Badge, Button, Card, DateRange, Empty, Field, Input, Modal, Select, Textarea, cx, daysAgo, fmtDate, today } from '../components/ui';
 
 export const itemLabel = (i: any) =>
   `${i.qty} × ${i.name}${
@@ -25,7 +16,16 @@ export const itemLabel = (i: any) =>
         : ''
   }`;
 
-export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onClose: () => void; onChanged?: () => void }) {
+function statusDisplay(o: any) {
+  if (o.status === 'closed') return { badge: 'approved', label: '✔ Auto-Billed' };
+  if (o.status === 'served' && o.customer_role === 'guest') return { badge: 'pending', label: '💳 Pending Cash/UPI' };
+  if (o.status === 'draft') return { badge: 'draft', label: o.type === 'prebooked' ? '📅 Pre-Order' : 'Draft' };
+  if (o.status === 'cancelled') return { badge: 'cancelled', label: 'Cancelled' };
+  if (o.status === 'disputed') return { badge: 'disputed', label: 'Disputed' };
+  return { badge: o.status, label: o.status };
+}
+
+export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | null; onClose: () => void; onChanged?: () => void; onEdit?: (o: any) => void }) {
   const { user, money, toast } = useApp();
   const [o, setO] = useState<any>(null);
   const [note, setNote] = useState('');
@@ -46,20 +46,21 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
         method: 'POST',
         body: { status, note, ...(payMode ? { payment_mode: payMode, payment_ref: payRef || undefined } : {}) },
       });
-      toast('Updated');
+      toast(status === 'cancelled' ? 'Order cancelled & stock restored' : 'Order updated');
       onChanged?.();
       onClose();
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
   const isGuestOrder = o?.customer_role === 'guest';
+  const sd = o ? statusDisplay(o) : null;
 
   return (
     <Modal open={!!id} onClose={onClose} title={o ? `Order ${o.order_no}` : 'Order'}>
       {!o ? <div>Loading…</div> : (
         <div className="space-y-3 text-sm">
           <div className="flex flex-wrap gap-2">
-            <Badge s={o.status} />
+            {sd && <Badge s={sd.badge}>{sd.label}</Badge>}
             {isGuestOrder && <Badge s="placed">Guest</Badge>}
             {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Paid Cash' : '📱 Paid UPI'}</Badge>}
             {o.approval_status !== 'na' && <Badge s={o.approval_status}>approval: {o.approval_status}</Badge>}
@@ -87,7 +88,7 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
               {o.events?.map((e: any) => <li key={e.id}>{fmtDate(e.at)} · {e.from_status ? `${e.from_status} → ` : ''}<b>{e.to_status}</b> · {e.user_name || 'system'}{e.note ? ` · ${e.note}` : ''}</li>)}
             </ul>
           </div>
-          {isStaffRole(user?.role) && (
+          {isStaffRole(user?.role) && o.status !== 'cancelled' && (
             <div className="space-y-3 border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
               {isGuestOrder && o.status === 'served' && (
                 <div className="space-y-2 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
@@ -99,12 +100,15 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
                   <Input placeholder="Payment ref / UPI ID (optional)" value={payRef} onChange={(e) => setPayRef(e.target.value)} />
                 </div>
               )}
-              <Input placeholder="Note (optional / reason)" value={note} onChange={(e) => setNote(e.target.value)} />
+              <Input placeholder="Reason / note (e.g. item out of stock)" value={note} onChange={(e) => setNote(e.target.value)} />
               <div className="flex flex-wrap gap-2">
-                {NEXT[o.status] && <Button onClick={() => act(NEXT[o.status][0])}>{isGuestOrder && o.status === 'served' ? 'Checkout & Close' : NEXT[o.status][1]}</Button>}
-                {ACTIVE.includes(o.status) && o.status !== 'served' && o.status !== 'preparing' && <Button variant="success" onClick={() => act('served')}>Serve now</Button>}
+                {o.status === 'draft' && <Button variant="success" onClick={() => act('closed')}>✔ Accept &amp; Bill</Button>}
+                {isGuestOrder && o.status === 'served' && <Button variant="success" onClick={() => act('closed')}>Confirm Cash / UPI &amp; Bill</Button>}
                 {o.status === 'disputed' && isAdminRole(user?.role) && <Button variant="success" onClick={() => act('closed')}>Resolve dispute</Button>}
-                {(ACTIVE.includes(o.status) && (o.status !== 'served' || isAdminRole(user?.role))) && <Button variant="danger" onClick={() => act('cancelled')}>Cancel order</Button>}
+                {onEdit && <Button variant="subtle" onClick={() => { onClose(); onEdit(o); }}>✏️ Edit Items</Button>}
+                {(o.status !== 'disputed' || isAdminRole(user?.role)) && (
+                  <Button variant="danger" onClick={() => act('cancelled')}>✕ Cancel &amp; Restore Stock</Button>
+                )}
               </div>
             </div>
           )}
@@ -116,33 +120,53 @@ export function OrderDetail({ id, onClose, onChanged }: { id: number | null; onC
 
 export default function OrdersBoard() {
   const { money, toast } = useApp();
-  const [tab, setTab] = useState<'live' | 'history'>('live');
-  const [orders, setOrders] = useState<any[]>([]);
+  const [tab, setTab] = useState<'today' | 'guest_pay' | 'preorders' | 'history'>('today');
+  const [todayOrders, setTodayOrders] = useState<any[]>([]);
+  const [preorders, setPreorders] = useState<any[]>([]);
   const [hist, setHist] = useState<any[]>([]);
   const [guestReqs, setGuestReqs] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [range, setRange] = useState([daysAgo(6), today()]);
   const [hstatus, setHstatus] = useState('');
   const [search, setSearch] = useState('');
+  const [todaySearch, setTodaySearch] = useState('');
   const [sel, setSel] = useState<number | null>(null);
 
-  // Guest Checkout Payment Modal (triggered when closing a Guest order from the live board)
+  // Guest Checkout Modal
   const [checkoutOrder, setCheckoutOrder] = useState<any>(null);
   const [checkoutPayMode, setCheckoutPayMode] = useState<'cash' | 'upi'>('upi');
   const [checkoutPayRef, setCheckoutPayRef] = useState('');
 
-  const load = () => api(`/orders?status=${ACTIVE.join(',')}`, { cache: false }).then(setOrders).catch(() => {});
+  // Edit Order Items Modal (Bartender / Admin)
+  const [editOrder, setEditOrder] = useState<any>(null);
+  const [editItems, setEditItems] = useState<any[]>([]);
+  const [editNotes, setEditNotes] = useState('');
+  const [editReason, setEditReason] = useState('');
+  const [addProdId, setAddProdId] = useState('');
+  const [addServe, setAddServe] = useState<'peg30' | 'peg60' | 'bottle' | 'unit'>('peg30');
+
+  // Cancel Order Modal
+  const [cancelTarget, setCancelTarget] = useState<any>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  const load = () => {
+    const td = today();
+    api(`/orders?from=${td}&to=${td}&limit=200`, { cache: false }).then(setTodayOrders).catch(() => {});
+    api('/orders?status=draft&limit=100', { cache: false }).then(setPreorders).catch(() => {});
+  };
   const loadGuests = () => api('/users/guest-requests?status=pending', { cache: false }).then(setGuestReqs).catch(() => {});
   const loadHist = () => api(`/orders?from=${range[0]}&to=${range[1]}${hstatus ? `&status=${hstatus}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`).then(setHist).catch(() => {});
 
   useEffect(() => {
     load();
     loadGuests();
-    const t = setInterval(() => { load(); loadGuests(); }, 20000);
+    api('/products?all=1').then(setProducts).catch(() => {});
+    const t = setInterval(() => { load(); loadGuests(); }, 15000);
     const un = subscribe((ev, d) => {
       if (ev === 'order') {
         load();
         if (d.action === 'created') {
-          toast('🔔 New order received');
+          toast('🔔 New order auto-accepted & billed!');
           try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=').play(); } catch { /* */ }
         }
       }
@@ -155,18 +179,86 @@ export default function OrdersBoard() {
   }, []);
   useEffect(() => { if (tab === 'history') loadHist(); }, [tab, range, hstatus, search]);
 
-  const advance = async (o: any, forceStatus?: string, note?: string) => {
-    const nextStatus = forceStatus || NEXT[o.status][0];
-    // Guest order closing requires recording payment mode (Cash / UPI)
-    if (nextStatus === 'closed' && o.customer_role === 'guest') {
+  const openEditModal = (o: any) => {
+    setEditOrder(o);
+    setEditItems(o.items.map((i: any) => ({
+      product_id: i.product_id,
+      name: i.name,
+      serve_type: i.serve_type,
+      peg_ml: i.peg_ml,
+      qty: i.qty,
+      unit_price: i.unit_price,
+    })));
+    setEditNotes(o.notes || '');
+    setEditReason('');
+    setAddProdId('');
+  };
+
+  const addEditLine = () => {
+    const p = products.find((x) => x.id === Number(addProdId));
+    if (!p) return;
+    let serve_type = 'unit';
+    let peg_ml: number | null = null;
+    let unit_price = p.selling_price;
+    if (p.is_peg) {
+      if (addServe === 'bottle') { serve_type = 'bottle'; unit_price = p.selling_price; }
+      else if (addServe === 'peg60') { serve_type = 'peg'; peg_ml = 60; unit_price = Math.round(p.peg_price * 2 * 100) / 100; }
+      else { serve_type = 'peg'; peg_ml = 30; unit_price = p.peg_price; }
+    }
+    setEditItems((prev) => {
+      const idx = prev.findIndex((l) => l.product_id === p.id && l.serve_type === serve_type && (l.peg_ml || null) === peg_ml);
+      if (idx >= 0) return prev.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l));
+      return [...prev, { product_id: p.id, name: p.name, serve_type, peg_ml, qty: 1, unit_price }];
+    });
+    setAddProdId('');
+  };
+
+  const saveEditOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editOrder) return;
+    if (!editItems.length) return toast('Keep at least 1 item, or cancel the order instead', 'error');
+    try {
+      await api(`/orders/${editOrder.id}/items`, {
+        method: 'PUT',
+        body: {
+          items: editItems.map((l) => ({ product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty })),
+          notes: editNotes,
+          reason: editReason.trim() || 'Item availability adjustment',
+        },
+      });
+      toast(`✔ Order #${editOrder.order_no.split('-')[1]} updated & inventory adjusted`);
+      setEditOrder(null);
+      load();
+      if (tab === 'history') loadHist();
+    } catch (err: any) { toast(err.message, 'error'); }
+  };
+
+  const confirmCancel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelTarget) return;
+    try {
+      await api(`/orders/${cancelTarget.id}/status`, {
+        method: 'POST',
+        body: { status: 'cancelled', note: cancelReason.trim() || 'Cancelled by bartender (item unavailable)' },
+      });
+      toast(`Order #${cancelTarget.order_no.split('-')[1]} cancelled & stock restored`);
+      setCancelTarget(null);
+      setCancelReason('');
+      load();
+      if (tab === 'history') loadHist();
+    } catch (err: any) { toast(err.message, 'error'); }
+  };
+
+  const quickGuestPay = async (o: any, mode: 'cash' | 'upi') => {
+    if (mode === 'upi') {
       setCheckoutOrder(o);
       setCheckoutPayMode('upi');
       setCheckoutPayRef('');
       return;
     }
     try {
-      await api(`/orders/${o.id}/status`, { method: 'POST', body: { status: nextStatus, ...(note ? { note } : {}) } });
-      if (nextStatus === 'preparing' && o.status === 'placed') toast(`Order #${o.order_no.split('-')[1]} accepted → moved to Preparing`);
+      await api(`/orders/${o.id}/status`, { method: 'POST', body: { status: 'closed', payment_mode: 'cash' } });
+      toast(`✔ Guest order #${o.order_no.split('-')[1]} settled via CASH`);
       load();
     } catch (e: any) { toast(e.message, 'error'); }
   };
@@ -179,10 +271,24 @@ export default function OrdersBoard() {
         method: 'POST',
         body: { status: 'closed', payment_mode: checkoutPayMode, payment_ref: checkoutPayRef.trim() || undefined },
       });
-      toast(`Guest order closed · Paid via ${checkoutPayMode.toUpperCase()}`);
+      toast(`✔ Guest order billed · Paid via ${checkoutPayMode.toUpperCase()}`);
       setCheckoutOrder(null);
       load();
       if (tab === 'history') loadHist();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const billPreorder = async (o: any) => {
+    if (o.customer_role === 'guest') {
+      setCheckoutOrder(o);
+      setCheckoutPayMode('upi');
+      setCheckoutPayRef('');
+      return;
+    }
+    try {
+      await api(`/orders/${o.id}/status`, { method: 'POST', body: { status: 'closed', note: 'Pre-order accepted & billed' } });
+      toast(`✔ Pre-order #${o.order_no.split('-')[1]} accepted & billed!`);
+      load();
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
@@ -194,15 +300,31 @@ export default function OrdersBoard() {
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const pendingGuestPayments = useMemo(
+    () => todayOrders.filter((o) => o.status === 'served' && o.customer_role === 'guest'),
+    [todayOrders],
+  );
+
+  const visibleToday = useMemo(() => {
+    const q = todaySearch.trim().toLowerCase();
+    return todayOrders.filter((o) => {
+      if (o.status === 'draft') return false;
+      if (!q) return true;
+      return `${o.order_no} ${o.customer_name || ''} ${o.customer_service_no || ''} ${o.table_name || ''} ${o.items.map((i: any) => i.name).join(' ')}`.toLowerCase().includes(q);
+    });
+  }, [todayOrders, todaySearch]);
+
+  const activeList = tab === 'guest_pay' ? pendingGuestPayments : tab === 'preorders' ? preorders : visibleToday;
+  const selAddProd = products.find((p) => p.id === Number(addProdId));
+  const editTotal = editItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
+
   return (
     <div className="flex h-full flex-col gap-3 p-3">
       {/* Live Pending Guest Approvals Panel */}
       {guestReqs.length > 0 && (
         <Card className="!border-[#FBBF24] !bg-[#FBBF24]/10 !p-3.5">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-extrabold text-[#B86E00] dark:text-[#FCD34D]">
-              🪪 Pending Guest Registrations ({guestReqs.length}) — Bartender Approval Required
-            </div>
+          <div className="mb-2 text-sm font-extrabold text-[#B86E00] dark:text-[#FCD34D]">
+            🪪 Pending Guest Registrations ({guestReqs.length}) — Bartender Approval Required
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {guestReqs.map((g) => (
@@ -221,142 +343,133 @@ export default function OrdersBoard() {
         </Card>
       )}
 
-      <div className="flex items-center gap-2">
-        {(['live', 'history'] as const).map((t) => <Button key={t} variant={tab === t ? 'primary' : 'subtle'} onClick={() => setTab(t)}>{t === 'live' ? `Live orders (${orders.length})` : 'Order history'}</Button>)}
+      {/* Auto-Bill Info Banner + Tab Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant={tab === 'today' ? 'primary' : 'subtle'} onClick={() => setTab('today')}>
+            ⚡ Live / Today ({visibleToday.length})
+          </Button>
+          <Button variant={tab === 'guest_pay' ? 'primary' : 'subtle'} onClick={() => setTab('guest_pay')}>
+            💳 Guest Cash/UPI ({pendingGuestPayments.length})
+          </Button>
+          <Button variant={tab === 'preorders' ? 'primary' : 'subtle'} onClick={() => setTab('preorders')}>
+            📅 Pre-Orders ({preorders.length})
+          </Button>
+          <Button variant={tab === 'history' ? 'primary' : 'subtle'} onClick={() => setTab('history')}>
+            Order History
+          </Button>
+        </div>
+        {tab === 'today' && (
+          <Input
+            placeholder="🔍 Filter today's orders by officer, item or order #…"
+            value={todaySearch}
+            onChange={(e) => setTodaySearch(e.target.value)}
+            className="!max-w-xs"
+          />
+        )}
       </div>
 
-      {tab === 'live' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2 lg:grid-cols-4">
-          {(() => {
-            const nowMs = Date.now();
-            const todayStr = new Date().toLocaleDateString('en-CA');
-            const isDraftPreorder = (o: any) => o.status === 'draft' || (o.type === 'prebooked' && ['draft', 'placed', 'accepted'].includes(o.status));
-            const cols = [
-              {
-                key: 'draft',
-                badge: 'draft',
-                title: 'Draft · Pre-Orders',
-                list: orders.filter(isDraftPreorder).sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at)),
-              },
-              {
-                key: 'placed',
-                badge: 'placed',
-                title: 'Placed & Accepted',
-                list: orders.filter((o) => !isDraftPreorder(o) && ['placed', 'accepted'].includes(o.status)).sort((a, b) => a.id - b.id),
-              },
-              {
-                key: 'preparing',
-                badge: 'preparing',
-                title: 'Preparing',
-                list: orders.filter((o) => o.status === 'preparing').sort((a, b) => a.id - b.id),
-              },
-              {
-                key: 'served',
-                badge: 'served',
-                title: 'Served',
-                list: orders.filter((o) => o.status === 'served').sort((a, b) => a.id - b.id),
-              },
-            ];
-            return cols.map((col) => (
-              <div key={col.key} className="flex min-h-0 flex-col rounded-[20px] border border-transparent bg-white/60 p-3 dark:border-[#2A3346] dark:bg-[#1C2230]/80">
-                <div className="mb-2.5 flex items-center justify-between px-1">
-                  <Badge s={col.badge}>{col.title}</Badge>
-                  <span className="text-xs font-bold text-[#94A3B8]">{col.list.length}</span>
-                </div>
-                <div className="space-y-2.5 overflow-auto">
-                  {col.list.length === 0 && <div className="py-8 text-center text-xs text-[#94A3B8]">No orders</div>}
-                  {col.list.map((o) => {
-                    const dueMs = o.scheduled_at ? Date.parse(o.scheduled_at) : NaN;
-                    const minsToDue = !isNaN(dueMs) ? Math.round((dueMs - nowMs) / 60000) : null;
-                    const isDueToday = !isNaN(dueMs) && new Date(dueMs).toLocaleDateString('en-CA') === todayStr;
-                    const isDueSoon = minsToDue != null && minsToDue <= 60;
+      {tab !== 'history' ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="mb-3 rounded-2xl bg-[#10B981]/10 px-4 py-2 text-xs font-semibold text-[#059669] dark:text-[#34D399]">
+            ⚡ <b>Auto-Accept &amp; Auto-Bill Active:</b> Customer &amp; bar orders are automatically accepted, billed, and deducted from stock — no status clicks needed! Use <b>Edit Items</b> or <b>Cancel</b> only if an item is unavailable or needs changes.
+          </div>
 
-                    return (
-                      <div
-                        key={o.id}
-                        className={cx(
-                          'horizon-shadow rounded-2xl bg-white p-3.5 dark:bg-[#252D3D]',
-                          col.key === 'draft' && isDueSoon && 'ring-2 ring-[#FBBF24]',
-                          col.key === 'draft' && !isDueSoon && o.type === 'prebooked' && 'ring-1 ring-[#422AFB]/50 dark:ring-[#818CF8]/50',
-                        )}
-                      >
-                        <button className="w-full text-left" onClick={() => setSel(o.id)}>
-                          <div className="flex justify-between text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">
-                            <span>#{o.order_no.split('-')[1]} {o.table_name && `· ${o.table_name}`}</span>
-                            <span className="text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</span>
+          {activeList.length === 0 ? (
+            <Empty>
+              {tab === 'guest_pay' ? 'No guest orders waiting for Cash/UPI payment' : tab === 'preorders' ? 'No upcoming pre-orders' : 'No orders placed today yet'}
+            </Empty>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {activeList.map((o) => {
+                const sd = statusDisplay(o);
+                const isCancelled = o.status === 'cancelled';
+                return (
+                  <div
+                    key={o.id}
+                    className={cx(
+                      'horizon-shadow flex flex-col justify-between rounded-[20px] border bg-white p-4 dark:bg-[#1C2230]',
+                      o.status === 'served' && o.customer_role === 'guest'
+                        ? 'border-[#FBBF24] ring-1 ring-[#FBBF24]/50'
+                        : isCancelled
+                          ? 'border-[#E9EDF7] opacity-60 dark:border-[#2A3346]'
+                          : 'border-[#E9EDF7] dark:border-[#2A3346]',
+                    )}
+                  >
+                    <button className="w-full text-left" onClick={() => setSel(o.id)}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">
+                            #{o.order_no.split('-')[1]} {o.table_name && `· ${o.table_name}`}
                           </div>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-medium text-[#94A3B8]">
-                            <span>{o.customer_rank ? `${o.customer_rank} ` : ''}{o.customer_name || 'Walk-in'}</span>
-                            {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}
-                            <span>· {fmtDate(o.created_at)} {o.source === 'qr' && '· QR'}</span>
+                          <div className="mt-0.5 text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">
+                            {o.customer_rank ? `${o.customer_rank} ` : ''}{o.customer_name || 'Walk-in'}
+                            {o.customer_service_no ? ` (${o.customer_service_no})` : ''}
                           </div>
-                          {o.type === 'prebooked' && o.scheduled_at && (
-                            <div className={cx('mt-1.5 rounded-xl px-2.5 py-1 text-xs font-bold', isDueSoon ? 'bg-[#EE5D50]/15 text-[#EE5D50]' : isDueToday ? 'bg-[#FBBF24]/20 text-[#B86E00] dark:text-[#FCD34D]' : 'bg-[#422AFB]/10 text-[#422AFB] dark:text-[#818CF8]')}>
-                              {isDueSoon
-                                ? minsToDue! <= 0
-                                  ? `⏰ Due NOW (${fmtDate(o.scheduled_at)}) — Move to Preparing!`
-                                  : `⏰ Due in ${minsToDue} min (${fmtDate(o.scheduled_at)}) — Prepare now!`
-                                : isDueToday
-                                  ? `📅 Due Today · ${fmtDate(o.scheduled_at)}`
-                                  : `🗓 Pre-Order · ${fmtDate(o.scheduled_at)}`}
-                            </div>
-                          )}
-                          <ul className="mt-1.5 text-sm font-medium">{o.items.map((i: any) => <li key={i.id}>{itemLabel(i)}</li>)}</ul>
-                          {o.notes && <div className="mt-1.5 rounded-xl bg-[#FBBF24]/15 px-2.5 py-1 text-xs font-semibold text-[#B86E00] dark:text-[#FCD34D]">📝 {o.notes}</div>}
-                        </button>
-
-                        {/* Column-specific action buttons */}
-                        {col.key === 'draft' && (
-                          <Button
-                            size="sm"
-                            variant={isDueSoon ? 'primary' : 'subtle'}
-                            className={cx('mt-2.5 w-full', isDueSoon && 'animate-pulse shadow-[0_0_16px_rgba(66,42,251,0.55)]')}
-                            onClick={() => advance(o, 'preparing', 'Pre-Order moved to Preparing')}
-                          >
-                            Move to Preparing →
-                          </Button>
-                        )}
-
-                        {col.key === 'placed' && (
-                          <div className="mt-2.5 grid grid-cols-2 gap-2">
-                            <span className="inline-flex min-h-9 items-center justify-center gap-1 rounded-xl bg-[#01B574] px-3 py-1.5 text-xs font-extrabold text-white shadow-xs">
-                              ✓ Placed
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => advance(o, 'preparing', 'Accepted & moved to Preparing')}
-                              className="inline-flex min-h-9 animate-pulse items-center justify-center gap-1 rounded-xl bg-[#422AFB] px-3 py-1.5 text-xs font-extrabold text-white shadow-[0_0_18px_rgba(66,42,251,0.75)] ring-2 ring-[#818CF8]/70 transition hover:brightness-110 active:scale-95 dark:bg-[#6366F1] dark:shadow-[0_0_18px_rgba(99,102,241,0.8)]"
-                            >
-                              Accept →
-                            </button>
-                          </div>
-                        )}
-
-                        {col.key === 'preparing' && (
-                          <Button size="sm" variant="success" className="mt-2.5 w-full" onClick={() => advance(o, 'served', 'Served to customer')}>
-                            🍽 Serve →
-                          </Button>
-                        )}
-
-                        {col.key === 'served' && (
-                          <Button size="sm" className="mt-2.5 w-full" onClick={() => advance(o, 'closed')}>
-                            {o.customer_role === 'guest' ? 'Checkout (Cash / UPI) →' : 'Close →'}
-                          </Button>
-                        )}
+                        </div>
+                        <span className="shrink-0 text-base font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                          {money(o.total)}
+                        </span>
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ));
-          })()}
+
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <Badge s={sd.badge}>{sd.label}</Badge>
+                        {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}
+                        {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge>}
+                        {o.source === 'favorite' && <Badge s="accepted">♥ Repeat</Badge>}
+                        <span className="ml-auto text-[11px] text-[#94A3B8]">{fmtDate(o.created_at)}</span>
+                      </div>
+
+                      {o.type === 'prebooked' && o.scheduled_at && (
+                        <div className="mt-2 rounded-xl bg-[#422AFB]/10 px-2.5 py-1 text-xs font-bold text-[#422AFB] dark:text-[#818CF8]">
+                          🗓 Scheduled: {fmtDate(o.scheduled_at)}
+                        </div>
+                      )}
+
+                      <ul className="mt-2.5 space-y-1 border-t border-[#E9EDF7] pt-2 text-xs font-semibold dark:border-[#2A3346]">
+                        {o.items.map((i: any) => (
+                          <li key={i.id} className="flex justify-between gap-2">
+                            <span className="truncate">{itemLabel(i)}</span>
+                            <span className="shrink-0 text-[#707EAE] dark:text-[#94A3B8]">{money(i.line_total)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      {o.notes && <div className="mt-2 rounded-xl bg-[#FBBF24]/15 px-2.5 py-1 text-xs font-semibold text-[#B86E00] dark:text-[#FCD34D]">📝 {o.notes}</div>}
+                    </button>
+
+                    {/* Streamlined Bartender Actions */}
+                    {!isCancelled && (
+                      <div className="mt-3 space-y-2 border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
+                        {o.status === 'draft' && (
+                          <Button size="sm" variant="success" className="w-full" onClick={() => billPreorder(o)}>
+                            ✔ Accept &amp; Bill Pre-Order
+                          </Button>
+                        )}
+                        {o.status === 'served' && o.customer_role === 'guest' && (
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <Button size="sm" variant="success" onClick={() => quickGuestPay(o, 'cash')}>💵 Cash</Button>
+                            <Button size="sm" variant="primary" onClick={() => quickGuestPay(o, 'upi')}>📱 UPI</Button>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <Button size="sm" variant="subtle" onClick={() => openEditModal(o)}>✏️ Edit Items</Button>
+                          <Button size="sm" variant="danger" onClick={() => { setCancelTarget(o); setCancelReason(''); }}>✕ Cancel</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <DateRange from={range[0]} to={range[1]} onChange={(f, t) => setRange([f, t])} />
             <select className="rounded-2xl border border-[#E0E5F2] bg-white px-3 py-2 text-sm dark:border-[#2E384D] dark:bg-[#151A25]" value={hstatus} onChange={(e) => setHstatus(e.target.value)}>
-              <option value="">All statuses</option>{['closed', 'cancelled', 'disputed', ...ACTIVE].map((s) => <option key={s}>{s}</option>)}
+              <option value="">All statuses</option>
+              {['closed', 'served', 'draft', 'cancelled', 'disputed'].map((s) => <option key={s}>{s}</option>)}
             </select>
             <Input placeholder="Search order / customer / table" className="!w-64" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
@@ -365,24 +478,129 @@ export default function OrdersBoard() {
               <tr><th className="p-2">Order</th><th>Date</th><th>Customer</th><th>Table</th><th>Items</th><th>Status</th><th>Payment</th><th>Approval</th><th className="text-right">Total</th></tr>
             </thead>
             <tbody>
-              {hist.map((o) => (
-                <tr key={o.id} onClick={() => setSel(o.id)} className="cursor-pointer border-t border-[#E9EDF7] hover:bg-white/60 dark:border-[#2A3346] dark:hover:bg-[#1C2230]">
-                  <td className="p-2 font-bold">{o.order_no}</td>
-                  <td>{fmtDate(o.created_at)}</td>
-                  <td>{o.customer_name || 'Walk-in'} {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}</td>
-                  <td>{o.table_name || '—'}</td>
-                  <td className="max-w-xs truncate">{o.items.map(itemLabel).join(', ')}</td>
-                  <td><Badge s={o.status} /></td>
-                  <td>{o.payment_mode ? <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge> : <span className="text-xs text-[#94A3B8]">Member Bill</span>}</td>
-                  <td>{o.approval_status !== 'na' && <Badge s={o.approval_status} />}</td>
-                  <td className="text-right font-bold">{money(o.total)}</td>
-                </tr>
-              ))}
+              {hist.map((o) => {
+                const sd = statusDisplay(o);
+                return (
+                  <tr key={o.id} onClick={() => setSel(o.id)} className="cursor-pointer border-t border-[#E9EDF7] hover:bg-white/60 dark:border-[#2A3346] dark:hover:bg-[#1C2230]">
+                    <td className="p-2 font-bold">{o.order_no}</td>
+                    <td>{fmtDate(o.created_at)}</td>
+                    <td>{o.customer_name || 'Walk-in'} {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}</td>
+                    <td>{o.table_name || '—'}</td>
+                    <td className="max-w-xs truncate">{o.items.map(itemLabel).join(', ')}</td>
+                    <td><Badge s={sd.badge}>{sd.label}</Badge></td>
+                    <td>{o.payment_mode ? <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge> : <span className="text-xs text-[#94A3B8]">Member Bill</span>}</td>
+                    <td>{o.approval_status !== 'na' && <Badge s={o.approval_status} />}</td>
+                    <td className="text-right font-bold">{money(o.total)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {hist.length === 0 && <Empty>No orders in range</Empty>}
         </div>
       )}
+
+      {/* Edit Order Items Modal (Bartender / Admin) */}
+      <Modal open={!!editOrder} onClose={() => setEditOrder(null)} title={editOrder ? `Edit Order #${editOrder.order_no.split('-')[1]} — ${editOrder.customer_name || 'Walk-in'}` : 'Edit Order'} wide>
+        {editOrder && (
+          <form onSubmit={saveEditOrder} className="space-y-4">
+            <p className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+              Remove unavailable items, adjust quantities, or add replacement items. Stock and bill total are recalculated automatically.
+            </p>
+            <div className="space-y-2">
+              {editItems.map((l, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-2 rounded-2xl bg-[#F4F7FE] p-2.5 dark:bg-[#252D3D]">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold">{itemLabel(l)}</div>
+                    <div className="text-xs text-[#94A3B8]">{money(l.unit_price)} each</div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: x.qty - 1 } : x)).filter((x) => x.qty > 0))}
+                      className="h-8 w-8 rounded-lg bg-white font-bold dark:bg-[#1C2230]"
+                    >−</button>
+                    <span className="w-6 text-center text-sm font-bold">{l.qty}</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: x.qty + 1 } : x)))}
+                      className="h-8 w-8 rounded-lg bg-white font-bold dark:bg-[#1C2230]"
+                    >+</button>
+                    <button
+                      type="button"
+                      onClick={() => setEditItems((prev) => prev.filter((_, i) => i !== idx))}
+                      className="ml-1 rounded-lg px-2 py-1 text-xs font-bold text-[#EE5D50] hover:bg-[#EE5D50]/10"
+                      title="Remove item"
+                    >Remove</button>
+                  </div>
+                </div>
+              ))}
+              {editItems.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-[#EE5D50] p-4 text-center text-xs font-semibold text-[#EE5D50]">
+                  All items removed. Either add a replacement item below or cancel the order.
+                </div>
+              )}
+            </div>
+
+            {/* Quick Add Replacement Item */}
+            <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-[#E9EDF7] p-3 dark:border-[#2A3346]">
+              <div className="min-w-[200px] flex-1">
+                <Field label="Add / Substitute Item">
+                  <Select value={addProdId} onChange={(e) => { setAddProdId(e.target.value); setAddServe('peg30'); }}>
+                    <option value="">Choose product…</option>
+                    {products.filter((p) => p.active).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.is_peg ? `${money(p.peg_price)}/30ml` : money(p.selling_price)})</option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              {selAddProd?.is_peg && (
+                <div className="w-40">
+                  <Field label="Serve">
+                    <Select value={addServe} onChange={(e) => setAddServe(e.target.value as any)}>
+                      <option value="peg30">Small (30 ml)</option>
+                      <option value="peg60">Large (60 ml)</option>
+                      <option value="bottle">Full Bottle</option>
+                    </Select>
+                  </Field>
+                </div>
+              )}
+              <Button type="button" variant="subtle" onClick={addEditLine} disabled={!addProdId}>+ Add</Button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Order Notes"><Input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} /></Field>
+              <Field label="Edit Reason"><Input value={editReason} onChange={(e) => setEditReason(e.target.value)} placeholder="e.g. Brand unavailable, substituted" /></Field>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
+              <div className="text-base font-extrabold">Updated Total: <span className="text-[#422AFB] dark:text-[#818CF8]">{money(editTotal)}</span></div>
+              <div className="flex gap-2">
+                <Button type="button" variant="ghost" onClick={() => setEditOrder(null)}>Close</Button>
+                <Button type="submit" disabled={!editItems.length}>Save Changes</Button>
+              </div>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Cancel Order Confirmation Modal */}
+      <Modal open={!!cancelTarget} onClose={() => setCancelTarget(null)} title={cancelTarget ? `Cancel Order #${cancelTarget.order_no.split('-')[1]}` : 'Cancel Order'}>
+        {cancelTarget && (
+          <form onSubmit={confirmCancel} className="space-y-4">
+            <p className="text-sm text-[#707EAE] dark:text-[#94A3B8]">
+              Cancelling this order will void the bill (<b>{money(cancelTarget.total)}</b>) and automatically restore all deducted items back to inventory.
+            </p>
+            <Field label="Reason for cancellation">
+              <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="e.g. Item out of stock / Customer cancelled" autoFocus />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setCancelTarget(null)}>Keep Order</Button>
+              <Button type="submit" variant="danger">Confirm Cancel &amp; Restore Stock</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Guest Checkout Payment Mode Modal */}
       <Modal open={!!checkoutOrder} onClose={() => setCheckoutOrder(null)} title={`Guest Checkout — ${checkoutOrder?.order_no || ''}`}>
@@ -411,13 +629,13 @@ export default function OrdersBoard() {
             </Field>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setCheckoutOrder(null)}>Cancel</Button>
-              <Button type="submit">Confirm Payment & Close Order</Button>
+              <Button type="submit">Confirm Payment &amp; Bill</Button>
             </div>
           </form>
         )}
       </Modal>
 
-      <OrderDetail id={sel} onClose={() => setSel(null)} onChanged={() => { load(); if (tab === 'history') loadHist(); }} />
+      <OrderDetail id={sel} onClose={() => setSel(null)} onEdit={openEditModal} onChanged={() => { load(); if (tab === 'history') loadHist(); }} />
     </div>
   );
 }

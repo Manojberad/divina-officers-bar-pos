@@ -18,9 +18,11 @@ const svg = (label, color, kind) => {
 };
 
 const CATS = [
-  ['Alcohol', 3, 1],
-  ['Soft Drinks', 24, 10],
-  ['Food', 10, 4],
+  ['Alcohol', 3, 1, 5],
+  ['Soft Drinks', 24, 10, 10],
+  ['Food', 10, 4, 10],
+  ['Cigarettes', 10, 3, 7.5],
+  ['Misc', 10, 3, 0],
 ];
 // name, cat, sub_category, brand, size, unit, is_peg, purchase, selling(bottle/unit), peg_price(30ml), stock(bottles/units), color, kind, desc
 const PRODUCTS = [
@@ -37,10 +39,10 @@ const PRODUCTS = [
   ['Wheat Beer 330ml', 'Alcohol', 'Beer', 'Bavaria', 330, 'bottle', 0, 120, 200, 0, 48, '#fb923c', 'bottle', 'Cloudy wheat ale'],
   ['Red Wine Shiraz', 'Alcohol', 'Wine', 'Valley', 750, 'bottle', 1, 800, 1300, 90, 5, '#7f1d1d', 'bottle', 'Full bodied shiraz (glass = 30ml multiples)'],
   ['White Wine Chenin', 'Alcohol', 'Wine', 'Valley', 750, 'bottle', 1, 750, 1200, 85, 2, '#fef08a', 'bottle', 'Crisp chenin blanc'],
-  ['Cola 300ml', 'Soft Drinks', null, 'Fizz', 300, 'unit', 0, 20, 40, 0, 120, '#991b1b', 'can', 'Chilled cola'],
-  ['Soda 750ml', 'Soft Drinks', null, 'Fizz', 750, 'unit', 0, 18, 35, 0, 80, '#d1d5db', 'bottle', 'Club soda'],
-  ['Tonic Water', 'Soft Drinks', null, 'Fizz', 300, 'unit', 0, 35, 60, 0, 9, '#cffafe', 'can', 'Indian tonic water'],
-  ['Mineral Water 1L', 'Soft Drinks', null, 'Pure', 1000, 'unit', 0, 15, 30, 0, 60, '#60a5fa', 'bottle', 'Packaged drinking water'],
+  ['Cola 300ml', 'Soft Drinks', 'Soda', 'Fizz', 300, 'unit', 0, 20, 40, 0, 120, '#991b1b', 'can', 'Chilled cola'],
+  ['Soda 750ml', 'Soft Drinks', 'Soda', 'Fizz', 750, 'unit', 0, 18, 35, 0, 80, '#d1d5db', 'bottle', 'Club soda'],
+  ['Tonic Water', 'Soft Drinks', 'Soda', 'Fizz', 300, 'unit', 0, 35, 60, 0, 9, '#cffafe', 'can', 'Indian tonic water'],
+  ['Mineral Water 1L', 'Soft Drinks', 'Water', 'Pure', 1000, 'unit', 0, 15, 30, 0, 60, '#60a5fa', 'bottle', 'Packaged drinking water'],
   ['Roasted Peanuts', 'Food', 'Packed', 'House', 0, 'packet', 0, 30, 80, 0, 40, '#d97706', 'snack', 'Salted & masala peanuts'],
   ['Chicken Tikka', 'Food', 'Non-Veg', 'Kitchen', 0, 'plate', 0, 120, 250, 0, 25, '#dc2626', 'snack', '6 pieces, mint chutney'],
   ['French Fries', 'Food', 'Veg', 'Kitchen', 0, 'plate', 0, 40, 120, 0, 3, '#fbbf24', 'snack', 'Salted fries'],
@@ -65,7 +67,7 @@ export function seed({ withOrders = true } = {}) {
       ids[sn] = Number(q.run('INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, must_change_pin) VALUES(?,?,?,?,?,?,?,?,0)',
         name, sn, rank, mob, email || null, cat, role, hashPin(sn)).lastInsertRowid);
     }
-    CATS.forEach(([n, l, c], i) => q.run('INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort) VALUES(?,?,?,?)', n, l, c, i + 1));
+    CATS.forEach(([n, l, c, m], i) => q.run('INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin) VALUES(?,?,?,?,?)', n, l, c, i + 1, m));
     for (let i = 1; i <= 6; i++) q.run('INSERT INTO tables(name, code) VALUES(?,?)', `Table ${i}`, `t${i}${Math.random().toString(36).slice(2, 8)}`);
   });
   const backdate = (d) => new Date(Date.now() - d * 86400e3).toISOString();
@@ -121,8 +123,10 @@ export function seed({ withOrders = true } = {}) {
       const bt = { id: ids.BT001, role: 'bartender' };
       if (k % 17 === 5) transition(order.id, 'cancelled', bt, 'Customer left');
       else {
-        transition(order.id, 'served', bt);
-        transition(order.id, 'closed', bt);
+        if (order.status !== 'closed') {
+          transition(order.id, 'served', bt);
+          transition(order.id, 'closed', bt);
+        }
         const appr = k % 9 === 0 ? 'expired' : 'approved';
         q.run('UPDATE orders SET approval_status=?, approval_at=? WHERE id=?', appr, appr === 'approved' ? at : null, order.id);
       }
@@ -140,10 +144,8 @@ export function seed({ withOrders = true } = {}) {
   createOrder({ table_code: q.get('SELECT code FROM tables WHERE id=?', tables[2].id).code, items: [{ product_id: lager, qty: 2 }], source: 'qr' }, { id: ids['IC-62345'], role: 'member' });
   const tomorrow = new Date(Date.now() + 86400e3); tomorrow.setHours(20, 0, 0, 0);
   createOrder({ type: 'prebooked', scheduled_at: tomorrow.toISOString(), items: [{ product_id: ro, serve_type: 'peg', peg_ml: 60, qty: 4 }], notes: 'Birthday party, 6 guests' }, { id: ids['IC-40001'], role: 'member' });
-  // One closed order awaiting approval for Lt Col Sharma
-  const { order } = createOrder({ user_id: ids['IC-51234'], items: [{ product_id: lager, qty: 2 }] }, { id: ids.BT001, role: 'bartender' });
-  transition(order.id, 'served', { id: ids.BT001, role: 'bartender' });
-  transition(order.id, 'closed', { id: ids.BT001, role: 'bartender' });
+  // One auto-billed order awaiting approval for Lt Col Sharma
+  createOrder({ user_id: ids['IC-51234'], items: [{ product_id: lager, qty: 2 }] }, { id: ids.BT001, role: 'bartender' });
   console.log('[seed] done');
 }
 

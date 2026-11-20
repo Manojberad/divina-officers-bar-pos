@@ -15,6 +15,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Account from './pages/Account';
 import QRMenu from './pages/QRMenu';
+import FavoriteOrders from './pages/FavoriteOrders';
 
 function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const { user, ready } = useApp();
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/pos" element={<Guard roles={['admin', 'bartender']}><POS mode="staff" /></Guard>} />
         <Route path="/orders" element={<Guard roles={['admin', 'bartender']}><OrdersBoard /></Guard>} />
         <Route path="/order" element={<Guard roles={['admin', 'member', 'customer', 'guest']}><POS mode="self" /></Guard>} />
+        <Route path="/favorite-orders" element={<FavoriteOrders />} />
         <Route path="/my-orders" element={<MyOrders />} />
         <Route path="/account" element={<Account />} />
         <Route path="/dashboard" element={<Guard roles={['admin']}><Dashboard /></Guard>} />

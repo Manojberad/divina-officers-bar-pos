@@ -175,7 +175,14 @@ export function createOrder(body, user) {
     if (!body.scheduled_at || isNaN(Date.parse(body.scheduled_at))) throw new HttpError(400, 'Pre-booked orders need a valid date/time');
     if (['customer', 'guest'].includes(user?.role)) throw new HttpError(403, 'Only members can pre-book orders');
   }
-  const status = body.status === 'draft' || type === 'prebooked' ? 'draft' : 'placed';
+  const isDraft = body.status === 'draft' || type === 'prebooked';
+  const normPay = body.payment_mode ? String(body.payment_mode).toLowerCase() : null;
+  if (normPay && !['cash', 'upi'].includes(normPay)) throw new HttpError(400, 'Payment mode must be Cash or UPI');
+
+  // Streamlined single-bartender flow: on-demand orders are auto-accepted & billed immediately
+  // (Guest orders without payment_mode are auto-accepted & stock-deducted as 'served' awaiting 1-tap Cash/UPI)
+  const autoGuestServed = !isDraft && targetUser?.role === 'guest' && !normPay;
+  const status = isDraft ? 'draft' : autoGuestServed ? 'served' : 'closed';
 
   const items = body.items.map((it) => {
     const p = getProduct(Number(it.product_id));
@@ -215,21 +222,101 @@ export function createOrder(body, user) {
 
   const id = tx(() => {
     const t = now();
-    const r = q.run(`INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, type, scheduled_at, status, source, notes, total, created_at, updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, nextOrderNo(), body.client_uuid || crypto.randomUUID(), userId, user?.id ?? null, tableId,
+    const closedAt = status === 'closed' ? t : null;
+    const approvalStatus = status === 'closed' ? (userId ? 'pending' : 'na') : 'na';
+    const r = q.run(
+      `INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, type, scheduled_at, status, source, notes, total, payment_mode, payment_ref, closed_at, approval_status, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      nextOrderNo(), body.client_uuid || crypto.randomUUID(), userId, user?.id ?? null, tableId,
       type, type === 'prebooked' ? new Date(body.scheduled_at).toISOString() : null, status, body.source || (isStaff ? 'pos' : 'self'),
-      body.notes || null, total, t, t);
+      body.notes || null, total, normPay, body.payment_ref ? String(body.payment_ref).trim() : null, closedAt, approvalStatus, t, t,
+    );
     const oid = Number(r.lastInsertRowid);
     for (const i of items) {
       q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty) VALUES(?,?,?,?,?,?,?,?,?)`,
         oid, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty);
     }
-    q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', oid, null, status, user?.id ?? null, 'created', t);
+    const evNote = isDraft ? 'pre-order / draft created' : autoGuestServed ? 'auto-accepted (guest awaiting Cash/UPI)' : 'auto-accepted & billed';
+    q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', oid, null, status, user?.id ?? null, evNote, t);
+    if (!isDraft) {
+      const created = loadOrder(oid);
+      deduct(created, user?.id ?? null);
+    }
     return oid;
   });
   const order = loadOrder(id);
   broadcast('order', { id, user_id: order.user_id, status: order.status, action: 'created' });
   return { order, duplicate: false };
+}
+
+/** Bartender or Admin edits items/quantities of an order (e.g. item unavailable) with atomic stock adjustment. */
+export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
+  if (!user || !STAFF.includes(user.role)) throw new HttpError(403, 'Only bartender or admin can edit orders');
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    throw new HttpError(400, 'Order must keep at least one item — cancel the order to remove all items');
+  }
+  const settings = getSettings();
+  const updated = tx(() => {
+    const o = loadOrder(orderId);
+    if (!o) throw new HttpError(404, 'Order not found');
+    if (o.status === 'cancelled') throw new HttpError(409, 'Cannot edit a cancelled order');
+
+    const newItems = rawItems.map((it) => {
+      const p = getProduct(Number(it.product_id));
+      if (!p) throw new HttpError(400, 'Product not found');
+      return priceItem(p, it, settings, true);
+    });
+
+    const t = now();
+    if (o.stock_deducted) {
+      const oldMap = new Map(aggregateByProduct(o.items));
+      const newMap = new Map(aggregateByProduct(newItems));
+      const allPids = new Set([...oldMap.keys(), ...newMap.keys()]);
+      const allowNeg = settings.allow_negative_stock === '1';
+      for (const pid of allPids) {
+        const oldQty = oldMap.get(pid) || 0;
+        const newQty = newMap.get(pid) || 0;
+        const delta = newQty - oldQty; // positive = deduct more; negative = return stock
+        if (Math.abs(delta) > 1e-9) {
+          const p = getProduct(pid);
+          if (!allowNeg && p.stock - delta < -1e-9) {
+            throw new HttpError(409, `Insufficient stock for ${p.name}`);
+          }
+          q.run('UPDATE products SET stock = stock - ? WHERE id=?', delta, pid);
+        }
+        if (newQty <= 1e-9) {
+          q.run("DELETE FROM stock_movements WHERE order_id=? AND product_id=? AND type='sale'", o.id, pid);
+        } else if (oldQty <= 1e-9) {
+          q.run(
+            `INSERT INTO stock_movements(product_id, type, qty, unit_cost, order_id, note, user_id, at)
+             VALUES(?, 'sale', ?, NULL, ?, ?, ?, ?)`,
+            pid, -newQty, o.id, `Order ${o.order_no} (edited)`, user.id, t,
+          );
+        } else {
+          q.run(
+            "UPDATE stock_movements SET qty=?, note=?, user_id=?, at=? WHERE order_id=? AND product_id=? AND type='sale'",
+            -newQty, `Order ${o.order_no} (edited)`, user.id, t, o.id, pid,
+          );
+        }
+      }
+    }
+
+    const total = Math.round(newItems.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
+    q.run('DELETE FROM order_items WHERE order_id=?', o.id);
+    for (const i of newItems) {
+      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty) VALUES(?,?,?,?,?,?,?,?,?)`,
+        o.id, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty);
+    }
+    const nextNotes = notes !== undefined ? (notes || null) : o.notes;
+    const nextApproval = o.status === 'closed' && o.user_id ? 'pending' : o.approval_status;
+    q.run('UPDATE orders SET total=?, notes=?, approval_status=?, updated_at=? WHERE id=?', total, nextNotes, nextApproval, t, o.id);
+    const evMsg = `Edited by ${user.name}${reason ? `: ${reason}` : ''} (₹${o.total} → ₹${total})`;
+    q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', o.id, o.status, o.status, user.id, evMsg, t);
+    audit(user.id, 'order.edit', 'order', o.id, { old_total: o.total, new_total: total, reason });
+    return loadOrder(o.id);
+  });
+  broadcast('order', { id: orderId, user_id: updated.user_id, status: updated.status, action: 'edited' });
+  return updated;
 }
 
 function aggregateByProduct(items) {
@@ -269,8 +356,8 @@ export function transition(orderId, to, user, note, paymentMode = null, paymentR
     if (from === to) return o;
 
     if (to === 'cancelled') {
-      if (['closed', 'cancelled', 'disputed'].includes(from)) throw new HttpError(409, `Cannot cancel a ${from} order`);
-      if (from === 'served' && !isAdmin(user)) throw new HttpError(403, 'Only admin can cancel a served order');
+      if (from === 'cancelled') throw new HttpError(409, 'Order is already cancelled');
+      if (from === 'disputed' && !isAdmin(user)) throw new HttpError(403, 'Only admin can cancel a disputed order');
       if (!isStaff && !(isOwner && ['draft', 'placed'].includes(from))) throw new HttpError(403, 'Not allowed to cancel this order');
       reverse(o, user.id);
     } else if (FLOW.includes(to)) {

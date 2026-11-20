@@ -63,7 +63,32 @@ export default function MyOrders() {
               <div className="text-sm text-gray-500">{fmtDate(o.created_at)} {o.table_name && `· ${o.table_name}`} — {o.items.map(itemLabel).join(', ')}</div>
               {o.dispute_note && <div className="text-sm text-fuchsia-500">Dispute: {o.dispute_note}</div>}
               {o.resolution_note && <div className="text-sm text-emerald-500">Resolution: {o.resolution_note}</div>}
-              {['draft', 'placed'].includes(o.status) && <Button size="sm" variant="ghost" className="mt-1" onClick={() => cancel(o)}>Cancel</Button>}
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {['draft', 'placed'].includes(o.status) && <Button size="sm" variant="ghost" onClick={() => cancel(o)}>Cancel</Button>}
+                {o.items?.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    onClick={async () => {
+                      const favName = prompt('Save this order to Favorite Orders as:', `Order ${o.order_no}`);
+                      if (!favName?.trim()) return;
+                      try {
+                        await api('/orders/favorites', {
+                          method: 'POST',
+                          body: {
+                            name: favName.trim(),
+                            notes: o.notes || undefined,
+                            items: o.items.map((i: any) => ({ product_id: i.product_id, serve_type: i.serve_type, peg_ml: i.peg_ml, qty: i.qty })),
+                          },
+                        });
+                        toast(`♥ Saved "${favName.trim()}" to Favorite Orders!`);
+                      } catch (e: any) { toast(e.message, 'error'); }
+                    }}
+                  >
+                    ♥ Save as Favorite
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
         </div>

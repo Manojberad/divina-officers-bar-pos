@@ -216,6 +216,41 @@ const migrations = [
   UPDATE products SET sub_category = 'Wine' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND lower(name) LIKE '%wine%';
   UPDATE products SET sub_category = 'Beer' WHERE category_id = (SELECT id FROM categories WHERE name = 'Alcohol') AND sub_category IS NULL AND (lower(name) LIKE '%beer%' OR lower(name) LIKE '%lager%');
   `,
+  // v10 – Add Cigarettes & Misc categories, category profit_margin %, Soft Drinks sub-categories (Juices/Soda/Water), and member/guest Favorite Orders table
+  `
+  ALTER TABLE categories ADD COLUMN profit_margin REAL NOT NULL DEFAULT 0;
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin) VALUES
+    ('Alcohol', 3, 1, 1, 5),
+    ('Soft Drinks', 24, 10, 2, 10),
+    ('Food', 10, 4, 3, 10),
+    ('Cigarettes', 10, 3, 4, 7.5),
+    ('Misc', 10, 3, 5, 0);
+  UPDATE categories SET sort = 1, profit_margin = 5 WHERE name = 'Alcohol';
+  UPDATE categories SET sort = 2, profit_margin = 10 WHERE name = 'Soft Drinks';
+  UPDATE categories SET sort = 3, profit_margin = 10 WHERE name = 'Food';
+  UPDATE categories SET sort = 4, profit_margin = 7.5 WHERE name = 'Cigarettes';
+  UPDATE categories SET sort = 5, profit_margin = 0 WHERE name = 'Misc';
+  UPDATE products SET category_id = (SELECT id FROM categories WHERE name = 'Cigarettes'), sub_category = NULL, food_type = NULL
+    WHERE lower(description) LIKE '%cigarette%' OR lower(name) LIKE '%classic mild%' OR lower(name) LIKE '%classic ultra%' OR lower(name) LIKE '%gold flake%' OR lower(name) = 'wills' OR lower(name) = 'danil';
+  UPDATE products SET category_id = (SELECT id FROM categories WHERE name = 'Misc'), sub_category = NULL, food_type = NULL
+    WHERE lower(name) LIKE '%disposal%' OR lower(name) LIKE '%plastic glass%' OR lower(name) LIKE '%ice cube%' OR lower(name) LIKE '%fresh lime%';
+  UPDATE products SET sub_category = 'Water'
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'Soft Drinks') AND (lower(name) LIKE '%water%' AND lower(name) NOT LIKE '%tonic%');
+  UPDATE products SET sub_category = 'Juices'
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'Soft Drinks') AND (lower(name) LIKE '%juice%' OR lower(name) LIKE '%appy%');
+  UPDATE products SET sub_category = 'Soda'
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'Soft Drinks') AND sub_category IS NULL;
+  CREATE TABLE IF NOT EXISTS favorite_orders(
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    items_json TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_fav_orders_user ON favorite_orders(user_id);
+  `,
 ];
 
 export function migrate() {
@@ -268,7 +303,7 @@ export function getSettings() {
 
 export const ALL_TABLES = [
   'users', 'categories', 'products', 'tables', 'orders', 'order_items', 'order_events',
-  'stock_movements', 'reconciliations', 'settings', 'audit_logs', 'notifications',
+  'stock_movements', 'reconciliations', 'favorite_orders', 'settings', 'audit_logs', 'notifications',
 ];
 
 export function audit(userId, action, entity, entityId, details) {

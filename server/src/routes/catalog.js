@@ -18,14 +18,31 @@ export const imageUpload = multer({
 });
 const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10e6 } });
 
+export function applyCategoryMargin(categoryId, marginPct) {
+  const m = Math.max(0, Number(marginPct) || 0);
+  const prods = q.all('SELECT id, purchase_price, is_peg, size_ml FROM products WHERE category_id=?', categoryId);
+  let updated = 0;
+  for (const p of prods) {
+    const pp = Number(p.purchase_price) || 0;
+    if (!(pp > 0)) continue;
+    const sp = Math.round(pp * (1 + m / 100) * 100) / 100;
+    const pegp = p.is_peg && p.size_ml > 0 ? Math.round((sp / (p.size_ml / 30)) * 100) / 100 : 0;
+    q.run('UPDATE products SET selling_price=?, peg_price=? WHERE id=?', sp, pegp, p.id);
+    updated++;
+  }
+  return updated;
+}
+
 /* ---------- Categories ---------- */
 r.get('/categories', (_req, res) => res.json(q.all('SELECT * FROM categories ORDER BY sort, name')));
 
 r.post('/categories', requireRole('admin'), (req, res) => {
-  const { name, low_threshold = null, critical_threshold = null, sort = 0 } = req.body;
+  const { name, low_threshold = null, critical_threshold = null, sort = 0, profit_margin = 0 } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
   if (q.get('SELECT id FROM categories WHERE name=? COLLATE NOCASE', name.trim())) return res.status(400).json({ error: 'Category exists' });
-  const id = Number(q.run('INSERT INTO categories(name, low_threshold, critical_threshold, sort) VALUES(?,?,?,?)', name.trim(), numOrNull(low_threshold), numOrNull(critical_threshold), Number(sort) || 0).lastInsertRowid);
+  const margin = Math.max(0, Number(profit_margin) || 0);
+  const id = Number(q.run('INSERT INTO categories(name, low_threshold, critical_threshold, sort, profit_margin) VALUES(?,?,?,?,?)',
+    name.trim(), numOrNull(low_threshold), numOrNull(critical_threshold), Number(sort) || 0, margin).lastInsertRowid);
   audit(req.user.id, 'category.create', 'category', id, req.body);
   res.status(201).json(q.get('SELECT * FROM categories WHERE id=?', id));
 });
@@ -34,9 +51,18 @@ r.put('/categories/:id', requireRole('admin'), (req, res) => {
   const c = q.get('SELECT * FROM categories WHERE id=?', Number(req.params.id));
   if (!c) return res.status(404).json({ error: 'Not found' });
   const b = { ...c, ...req.body };
-  q.run('UPDATE categories SET name=?, low_threshold=?, critical_threshold=?, sort=? WHERE id=?', b.name, numOrNull(b.low_threshold), numOrNull(b.critical_threshold), Number(b.sort) || 0, c.id);
-  audit(req.user.id, 'category.update', 'category', c.id, req.body);
-  res.json(q.get('SELECT * FROM categories WHERE id=?', c.id));
+  const nextMargin = req.body.profit_margin !== undefined ? Math.max(0, Number(req.body.profit_margin) || 0) : (c.profit_margin || 0);
+  const shouldApply = req.body.apply_margin === true || (req.body.profit_margin !== undefined && req.body.apply_margin !== false);
+  let updatedProducts = 0;
+  tx(() => {
+    q.run('UPDATE categories SET name=?, low_threshold=?, critical_threshold=?, sort=?, profit_margin=? WHERE id=?',
+      b.name, numOrNull(b.low_threshold), numOrNull(b.critical_threshold), Number(b.sort) || 0, nextMargin, c.id);
+    if (shouldApply) {
+      updatedProducts = applyCategoryMargin(c.id, nextMargin);
+    }
+  });
+  audit(req.user.id, shouldApply ? 'category.margin_update' : 'category.update', 'category', c.id, { ...req.body, profit_margin: nextMargin, updated_products: updatedProducts });
+  res.json({ ...q.get('SELECT * FROM categories WHERE id=?', c.id), updated_products: updatedProducts });
 });
 
 r.delete('/categories/:id', requireRole('admin'), (req, res) => {
@@ -128,9 +154,11 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
     },
   ];
   const catRows = [
-    { Name: 'Alcohol', 'Low Threshold': 3, 'Critical Threshold': 1, Sort: 1 },
-    { Name: 'Soft Drinks', 'Low Threshold': 24, 'Critical Threshold': 10, Sort: 2 },
-    { Name: 'Food', 'Low Threshold': 10, 'Critical Threshold': 4, Sort: 3 },
+    { Name: 'Alcohol', 'Profit Margin (%)': 5, Sort: 1 },
+    { Name: 'Soft Drinks', 'Profit Margin (%)': 10, Sort: 2 },
+    { Name: 'Food', 'Profit Margin (%)': 10, Sort: 3 },
+    { Name: 'Cigarettes', 'Profit Margin (%)': 7.5, Sort: 4 },
+    { Name: 'Misc', 'Profit Margin (%)': 0, Sort: 5 },
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodRows), 'Products');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), 'Categories');

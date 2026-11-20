@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, download } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Button, Card, Field, Input, Modal, Select, StockDot } from '../components/ui';
 
-const BLANK = { name: '', category_id: '', sub_category: '', brand: '', description: '', size_ml: 750, unit: 'bottle', is_peg: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, min_stock: '', critical_stock: '', active: true };
+const BLANK = {
+  name: '', category_id: '', sub_category: '', brand: '', description: '', size_ml: 750, unit: 'bottle',
+  is_peg: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, active: true,
+};
 
 const SUB_OPTIONS: Record<string, string[]> = {
   alcohol: ['Whisky', 'Rum', 'Vodka', 'Gin', 'Brandy', 'Wine', 'Beer'],
+  'soft drinks': ['Juices', 'Soda', 'Water'],
   food: ['Packed', 'Veg', 'Non-Veg'],
 };
 
@@ -14,12 +18,44 @@ export default function Products() {
   const { money, toast } = useApp();
   const [products, setProducts] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
+  const [margins, setMargins] = useState<Record<number, string>>({});
   const [ed, setEd] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
   const [catEd, setCatEd] = useState<any>(null);
+  const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('ALL');
 
-  const load = () => { api('/products?all=1', { cache: false }).then(setProducts); api('/categories', { cache: false }).then(setCats); };
+  const load = () => {
+    api('/products?all=1', { cache: false }).then(setProducts);
+    api<any[]>('/categories', { cache: false }).then((cs) => {
+      setCats(cs);
+      const m: Record<number, string> = {};
+      cs.forEach((c) => { m[c.id] = String(c.profit_margin ?? 0); });
+      setMargins(m);
+    });
+  };
   useEffect(load, []);
+
+  const applyMargin = async (c: any) => {
+    const val = Math.max(0, Number(margins[c.id]) || 0);
+    try {
+      const r = await api<any>(`/categories/${c.id}`, { method: 'PUT', body: { profit_margin: val, apply_margin: true } });
+      toast(`✔ ${c.name} margin set to ${val}% (${r.updated_products ?? 0} product prices recalculated)`);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  };
+
+  const recalcDraftPrices = (draft: any, nextPurchase?: any, nextCatId?: any, nextIsPeg?: boolean, nextSizeMl?: any) => {
+    const pp = Number(nextPurchase ?? draft.purchase_price) || 0;
+    const cid = nextCatId ?? draft.category_id;
+    const isPeg = nextIsPeg ?? draft.is_peg;
+    const sizeMl = Number(nextSizeMl ?? draft.size_ml) || 0;
+    const c = cats.find((x) => String(x.id) === String(cid));
+    const margin = Number(c?.profit_margin ?? 0);
+    const sp = pp > 0 ? Math.round(pp * (1 + margin / 100) * 100) / 100 : draft.selling_price;
+    const pegp = isPeg && sizeMl > 0 && sp > 0 ? Math.round((sp / (sizeMl / 30)) * 100) / 100 : 0;
+    return { ...draft, purchase_price: nextPurchase ?? draft.purchase_price, category_id: cid, is_peg: isPeg, size_ml: nextSizeMl ?? draft.size_ml, selling_price: sp, peg_price: pegp };
+  };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,13 +72,21 @@ export default function Products() {
 
   const saveCat = async (e: React.FormEvent) => {
     e.preventDefault();
-    try { await api(catEd.id ? `/categories/${catEd.id}` : '/categories', { method: catEd.id ? 'PUT' : 'POST', body: catEd }); setCatEd(null); load(); } catch (e: any) { toast(e.message, 'error'); }
+    try {
+      const r = await api<any>(catEd.id ? `/categories/${catEd.id}` : '/categories', {
+        method: catEd.id ? 'PUT' : 'POST',
+        body: { ...catEd, profit_margin: Number(catEd.profit_margin) || 0, apply_margin: true },
+      });
+      toast(catEd.id ? `Category updated (${r.updated_products ?? 0} prices updated)` : 'Category added');
+      setCatEd(null);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
   };
 
-  const importXlsx = async (file?: File) => {
-    if (!file) return;
+  const importXlsx = async (f?: File) => {
+    if (!f) return;
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', f);
     try {
       const r = await api('/products/import', { method: 'POST', body: fd });
       toast(`Imported: ${r.created} added, ${r.updated} updated${r.categories_created ? `, ${r.categories_created} new categories` : ''}${r.skipped?.length ? ` (${r.skipped.length} skipped)` : ''}`);
@@ -50,21 +94,56 @@ export default function Products() {
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter((p) => {
+      if (catFilter !== 'ALL' && String(p.category_id) !== catFilter) return false;
+      if (!q) return true;
+      return `${p.name} ${p.category || ''} ${p.sub_category || ''} ${p.brand || ''}`.toLowerCase().includes(q);
+    });
+  }, [products, search, catFilter]);
+
   return (
     <div className="space-y-4 p-4">
-      <Card title="Categories & default stock thresholds" actions={<Button size="sm" onClick={() => setCatEd({ name: '', low_threshold: 3, critical_threshold: 1 })}>+ Category</Button>}>
-        <div className="flex flex-wrap gap-2">
+      <Card
+        title="Categories & Profit Margins (%)"
+        actions={<Button size="sm" onClick={() => setCatEd({ name: '', profit_margin: 0 })}>+ Category</Button>}
+      >
+        <p className="mb-3 text-xs text-[#707EAE] dark:text-[#94A3B8]">
+          Edit the profit margin percentage for any category and click <b>Apply</b> to automatically recalculate selling &amp; 30 ml peg prices for all items in that category from their purchase price.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {cats.map((c) => (
-            <button key={c.id} onClick={() => setCatEd(c)} className="rounded-xl border px-3 py-2 text-left text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-900">
-              <div className="font-semibold">{c.name}</div>
-              <div className="text-xs text-gray-500">Low ≤ {c.low_threshold ?? 3} · Crit ≤ {c.critical_threshold ?? 1}</div>
-            </button>
+            <div key={c.id} className="rounded-2xl border border-[#E9EDF7] bg-[#F4F7FE]/70 p-3 dark:border-[#2A3346] dark:bg-[#252D3D]">
+              <div className="flex items-center justify-between gap-1">
+                <button type="button" onClick={() => setCatEd(c)} className="truncate text-sm font-extrabold text-[#1B2559] hover:text-[#422AFB] dark:text-[#E6EDF3] dark:hover:text-[#818CF8]">
+                  {c.name}
+                </button>
+                <span className="rounded-full bg-[#10B981]/15 px-2 py-0.5 text-[11px] font-extrabold text-[#059669] dark:text-[#34D399]">
+                  {c.profit_margin ?? 0}%
+                </span>
+              </div>
+              <div className="mt-2 flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  step="0.5"
+                  min={0}
+                  max={200}
+                  value={margins[c.id] ?? ''}
+                  onChange={(e) => setMargins({ ...margins, [c.id]: e.target.value })}
+                  className="!min-h-8 !px-2.5 !py-1 !text-xs"
+                  aria-label={`${c.name} profit margin %`}
+                />
+                <span className="text-xs font-bold text-[#94A3B8]">%</span>
+                <Button size="sm" onClick={() => applyMargin(c)}>Apply</Button>
+              </div>
+            </div>
           ))}
         </div>
       </Card>
 
       <Card
-        title={`Products (${products.length})`}
+        title={`Products (${filtered.length}${filtered.length !== products.length ? ` of ${products.length}` : ''})`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" onClick={() => download('/products/template', 'products-categories-template.xlsx').catch((e) => toast(e.message, 'error'))}>
@@ -78,35 +157,59 @@ export default function Products() {
           </div>
         }
       >
-        <p className="mb-3 text-xs text-[#707EAE] dark:text-[#94A3B8]">
-          Import products &amp; categories in bulk from Excel (<code>.xlsx</code> / <code>.csv</code>). Missing categories are created automatically; include <code>Food Type</code> (<code>Veg</code> / <code>Non-Veg</code>) for kitchen items.
-        </p>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Input placeholder="🔍 Search product, sub-category, brand…" value={search} onChange={(e) => setSearch(e.target.value)} className="!max-w-xs" />
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant={catFilter === 'ALL' ? 'primary' : 'subtle'} onClick={() => setCatFilter('ALL')}>All ({products.length})</Button>
+            {cats.map((c) => (
+              <Button key={c.id} size="sm" variant={catFilter === String(c.id) ? 'primary' : 'subtle'} onClick={() => setCatFilter(String(c.id))}>
+                {c.name} ({products.filter((p) => p.category_id === c.id).length})
+              </Button>
+            ))}
+          </div>
+        </div>
+
         <div className="overflow-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>Category / Sub</th><th>Size / Unit</th><th>Peg</th><th>Purchase</th><th>Selling</th><th>Peg (30ml)</th><th>Stock</th><th>Thresholds</th><th /></tr></thead>
+            <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
+              <tr>
+                <th className="p-2">Product</th>
+                <th>Category / Sub</th>
+                <th>Size / Unit</th>
+                <th>Purchase</th>
+                <th>Selling</th>
+                <th>30 ml Rate</th>
+                <th>Stock</th>
+                <th />
+              </tr>
+            </thead>
             <tbody>
-              {products.map((p) => (
-                <tr key={p.id} className={`border-t dark:border-gray-700 ${!p.active ? 'opacity-50' : ''}`}>
+              {filtered.map((p) => (
+                <tr key={p.id} className={`border-t border-[#E9EDF7] dark:border-[#2A3346] ${!p.active ? 'opacity-50' : ''}`}>
                   <td className="flex items-center gap-2 p-2 font-semibold">
-                    {p.image && <img src={p.image} className="h-9 w-9 rounded object-cover" alt="" />}
-                    <span>{p.name}</span>
-                    {p.food_type === 'veg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-emerald-600" title="Veg"><span className="h-2 w-2 rounded-full bg-emerald-600" /></span>}
-                    {p.food_type === 'nonveg' && <span className="inline-flex h-4 w-4 items-center justify-center rounded-xs border border-red-600" title="Non-Veg"><span className="h-2 w-2 rounded-full bg-red-600" /></span>}
+                    {p.image && <img src={p.image} className="h-9 w-9 shrink-0 rounded-lg object-cover" alt="" />}
+                    <span className="max-w-xs truncate" title={p.name}>{p.name}</span>
+                    {p.food_type === 'veg' && <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border border-emerald-600" title="Veg"><span className="h-2 w-2 rounded-full bg-emerald-600" /></span>}
+                    {p.food_type === 'nonveg' && <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border border-red-600" title="Non-Veg"><span className="h-2 w-2 rounded-full bg-red-600" /></span>}
                   </td>
                   <td>
                     <div className="font-medium">{p.category}</div>
                     {p.sub_category && <div className="text-xs text-[#94A3B8]">{p.sub_category}</div>}
                   </td>
-                  <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td><td>{p.is_peg ? 'Yes' : 'No'}</td>
-                  <td>{money(p.purchase_price)}</td><td>{money(p.selling_price)}</td><td>{p.is_peg ? money(p.peg_price) : '—'}</td>
+                  <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
+                  <td>{money(p.purchase_price)}</td>
+                  <td className="font-bold text-[#422AFB] dark:text-[#818CF8]">{money(p.selling_price)}</td>
+                  <td>{p.is_peg ? money(p.peg_price) : '—'}</td>
                   <td>
                     <StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} />
                     {p.is_peg && p.full_bottles != null && (p.full_bottles > 0 || p.loose_pegs_30ml > 0) && (
                       <div className="text-[11px] text-[#94A3B8]">{p.full_bottles} btl · {p.loose_pegs_30ml} pegs</div>
                     )}
                   </td>
-                  <td>{p.low_level} / {p.critical_level}</td>
-                  <td className="space-x-1 text-right"><Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, sub_category: p.sub_category ?? '', food_type: p.food_type ?? '', min_stock: p.min_stock ?? '', critical_stock: p.critical_stock ?? '' }); }}>Edit</Button><Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button></td>
+                  <td className="space-x-1 whitespace-nowrap text-right">
+                    <Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, sub_category: p.sub_category ?? '', food_type: p.food_type ?? '' }); }}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -118,7 +221,11 @@ export default function Products() {
         {ed && (
           <form onSubmit={save} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Product name"><Input value={ed.name} onChange={(e) => setEd({ ...ed, name: e.target.value })} required /></Field>
-            <Field label="Category"><Select value={ed.category_id || ''} onChange={(e) => setEd({ ...ed, category_id: e.target.value, sub_category: '' })}>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+            <Field label="Category">
+              <Select value={ed.category_id || ''} onChange={(e) => setEd(recalcDraftPrices({ ...ed, sub_category: '' }, undefined, e.target.value))}>
+                {cats.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.profit_margin ?? 0}% margin)</option>)}
+              </Select>
+            </Field>
             {(() => {
               const cName = (cats.find((c) => String(c.id) === String(ed.category_id))?.name || '').toLowerCase();
               const opts = SUB_OPTIONS[cName];
@@ -139,22 +246,28 @@ export default function Products() {
               );
             })()}
             <Field label="Brand"><Input value={ed.brand || ''} onChange={(e) => setEd({ ...ed, brand: e.target.value })} /></Field>
-            <Field label="Food Type (Kitchen Veg / Non-Veg)">
-              <Select value={ed.food_type || ''} onChange={(e) => setEd({ ...ed, food_type: e.target.value })}>
-                <option value="">Not applicable (Drink / Other)</option>
-                <option value="veg">Veg</option>
-                <option value="nonveg">Non-Veg</option>
+            <Field label="Serve mode">
+              <Select value={ed.is_peg ? '1' : '0'} onChange={(e) => setEd(recalcDraftPrices(ed, undefined, undefined, e.target.value === '1'))}>
+                <option value="1">Bottle + Peg (ml tracked)</option>
+                <option value="0">Unit / Bottle / Pack</option>
               </Select>
             </Field>
-            <Field label="Serve mode"><Select value={ed.is_peg ? '1' : '0'} onChange={(e) => setEd({ ...ed, is_peg: e.target.value === '1' })}><option value="1">Bottle + Peg (ml tracked)</option><option value="0">Unit / Bottle only</option></Select></Field>
-            <Field label="Bottle size (ml)"><Input type="number" value={ed.size_ml} onChange={(e) => setEd({ ...ed, size_ml: e.target.value })} /></Field>
+            <Field label="Bottle size (ml)">
+              <Input type="number" value={ed.size_ml} onChange={(e) => setEd(recalcDraftPrices(ed, undefined, undefined, undefined, e.target.value))} />
+            </Field>
             <Field label="Unit of measure"><Input value={ed.unit} onChange={(e) => setEd({ ...ed, unit: e.target.value })} /></Field>
-            <Field label="Purchase price (per bottle/unit)"><Input type="number" step="0.01" value={ed.purchase_price} onChange={(e) => setEd({ ...ed, purchase_price: e.target.value })} /></Field>
-            <Field label="Selling price (per bottle/unit)"><Input type="number" step="0.01" value={ed.selling_price} onChange={(e) => setEd({ ...ed, selling_price: e.target.value })} /></Field>
-            {ed.is_peg && <Field label="30 ml peg selling price" hint="60/90 ml scale proportionally"><Input type="number" step="0.01" value={ed.peg_price} onChange={(e) => setEd({ ...ed, peg_price: e.target.value })} /></Field>}
+            <Field label="Purchase price (per bottle/unit)">
+              <Input type="number" step="0.01" value={ed.purchase_price} onChange={(e) => setEd(recalcDraftPrices(ed, e.target.value))} />
+            </Field>
+            <Field label="Selling price (auto from margin, editable)">
+              <Input type="number" step="0.01" value={ed.selling_price} onChange={(e) => setEd({ ...ed, selling_price: e.target.value })} />
+            </Field>
+            {ed.is_peg && (
+              <Field label="30 ml peg selling price" hint="60 ml scales 2×">
+                <Input type="number" step="0.01" value={ed.peg_price} onChange={(e) => setEd({ ...ed, peg_price: e.target.value })} />
+              </Field>
+            )}
             {!ed.id && <Field label="Opening stock (bottles/units)"><Input type="number" step="0.01" value={ed.opening_stock} onChange={(e) => setEd({ ...ed, opening_stock: e.target.value })} /></Field>}
-            <Field label="Min stock override" hint="Blank = category default"><Input type="number" step="0.1" value={ed.min_stock} onChange={(e) => setEd({ ...ed, min_stock: e.target.value })} /></Field>
-            <Field label="Critical stock override"><Input type="number" step="0.1" value={ed.critical_stock} onChange={(e) => setEd({ ...ed, critical_stock: e.target.value })} /></Field>
             <Field label="Product image"><Input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} /></Field>
             <div className="sm:col-span-2"><Field label="Description"><Input value={ed.description || ''} onChange={(e) => setEd({ ...ed, description: e.target.value })} /></Field></div>
             {ed.id && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!ed.active} onChange={(e) => setEd({ ...ed, active: e.target.checked })} /> Active</label>}
@@ -166,14 +279,13 @@ export default function Products() {
       <Modal open={!!catEd} onClose={() => setCatEd(null)} title={catEd?.id ? 'Edit Category' : 'New Category'}>
         {catEd && (
           <form onSubmit={saveCat} className="space-y-3">
-            <Field label="Name"><Input value={catEd.name} onChange={(e) => setCatEd({ ...catEd, name: e.target.value })} required /></Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Low stock threshold"><Input type="number" step="0.5" value={catEd.low_threshold ?? ''} onChange={(e) => setCatEd({ ...catEd, low_threshold: e.target.value })} /></Field>
-              <Field label="Critical stock threshold"><Input type="number" step="0.5" value={catEd.critical_threshold ?? ''} onChange={(e) => setCatEd({ ...catEd, critical_threshold: e.target.value })} /></Field>
-            </div>
+            <Field label="Category Name"><Input value={catEd.name} onChange={(e) => setCatEd({ ...catEd, name: e.target.value })} required /></Field>
+            <Field label="Profit Margin (%)" hint="Automatically updates selling & 30 ml peg prices in this category">
+              <Input type="number" step="0.5" min={0} max={200} value={catEd.profit_margin ?? 0} onChange={(e) => setCatEd({ ...catEd, profit_margin: e.target.value })} />
+            </Field>
             <div className="flex justify-between">
               {catEd.id ? <Button type="button" variant="danger" onClick={async () => { try { await api(`/categories/${catEd.id}`, { method: 'DELETE' }); setCatEd(null); load(); } catch (e: any) { toast(e.message, 'error'); } }}>Delete</Button> : <span />}
-              <Button>Save</Button>
+              <Button>Save &amp; Apply Margin</Button>
             </div>
           </form>
         )}

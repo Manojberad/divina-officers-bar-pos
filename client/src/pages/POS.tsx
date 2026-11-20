@@ -10,6 +10,7 @@ export interface Product {
 }
 
 const ALCOHOL_SUB_ORDER = ['Whisky', 'Rum', 'Vodka', 'Gin', 'Brandy', 'Wine', 'Beer'];
+const SOFT_SUB_ORDER = ['Juices', 'Soda', 'Water'];
 const FOOD_SUB_ORDER = ['Packed', 'Veg', 'Non-Veg'];
 
 const VegMark = ({ type }: { type?: 'veg' | 'nonveg' | null }) =>
@@ -89,12 +90,15 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
       if (isAlcoholCat && subCat !== 'all') {
         if ((p.sub_category || '') !== subCat) return false;
       }
+      if (isSoftDrinksCat && subCat !== 'all') {
+        if ((p.sub_category || '') !== subCat) return false;
+      }
       if (isFoodCat && subCat !== 'all') {
         if (resolveFoodSub(p) !== subCat) return false;
       }
       return true;
     });
-  }, [products, cat, subCat, isAlcoholCat, isFoodCat, search]);
+  }, [products, cat, subCat, isAlcoholCat, isSoftDrinksCat, isFoodCat, search]);
 
   const add = (p: Product, serve: Line['serve_type'], peg_ml?: number) => {
     const unit_price = serve === 'peg' ? Math.round((p.peg_price * (peg_ml || 30)) / 30 * 100) / 100 : p.selling_price;
@@ -211,6 +215,30 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         </div>
         <div className="flex gap-2">
           {staff && <Button variant="ghost" disabled={!cart.length || busy} onClick={() => submit('draft')}>Draft</Button>}
+          {!staff && user && (
+            <Button
+              variant="subtle"
+              disabled={!cart.length || busy}
+              title="Save these items as a repeat Favorite Order"
+              onClick={async () => {
+                const favName = prompt('Name this Favorite Order (e.g. Evening Usual):');
+                if (!favName?.trim()) return;
+                try {
+                  await api('/orders/favorites', {
+                    method: 'POST',
+                    body: {
+                      name: favName.trim(),
+                      notes: opts.notes || undefined,
+                      items: cart.map((l) => ({ product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty })),
+                    },
+                  });
+                  toast(`♥ Saved "${favName.trim()}" to Favorite Orders!`);
+                } catch (e: any) { toast(e.message, 'error'); }
+              }}
+            >
+              ♥ Save Fav
+            </Button>
+          )}
           <Button size="lg" className="flex-1" disabled={!cart.length || busy} onClick={() => submit('placed')}>{busy ? 'Placing…' : 'Place Order'}</Button>
         </div>
       </div>
@@ -287,7 +315,41 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             </div>
           )}
 
-          {/* Food Sub-Categories (Packed, Veg, Non-Veg) — Soft Drinks has no sub-categories */}
+          {/* Soft Drinks Sub-Categories (Juices, Soda, Water) */}
+          {!search.trim() && isSoftDrinksCat && (
+            <div className="no-scrollbar flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setSubCat('all')}
+                className={cx(
+                  'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                  subCat === 'all'
+                    ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                    : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                )}
+              >
+                All Soft Drinks ({products.filter((p) => p.category_id === cat).length})
+              </button>
+              {SOFT_SUB_ORDER.map((sc) => {
+                const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
+                return (
+                  <button
+                    key={sc}
+                    onClick={() => setSubCat(sc)}
+                    className={cx(
+                      'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                      subCat === sc
+                        ? 'bg-[#0EA5E9] text-white shadow-sm'
+                        : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                    )}
+                  >
+                    {sc} ({cnt})
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Food Sub-Categories (Packed, Veg, Non-Veg) */}
           {!search.trim() && isFoodCat && !isSoftDrinksCat && (
             <div className="flex flex-wrap items-center gap-2">
               {([['all', 'All Food'], ['Packed', '📦 Packed'], ['Veg', 'Veg'], ['Non-Veg', 'Non-Veg']] as const).map(([k, label]) => (
@@ -358,9 +420,11 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                       </button>
                     )}
                   </div>
-                  <div className="mt-3 px-0.5">
-                    <div className="truncate text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{p.name}</div>
-                    <div className="mt-0.5 truncate text-xs font-medium text-[#94A3B8]">
+                  <div className="mt-2.5 px-0.5">
+                    <div className="line-clamp-2 min-h-[2rem] text-xs font-extrabold leading-snug text-[#1B2559] dark:text-[#E6EDF3]" title={p.name}>
+                      {p.name}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] font-medium text-[#94A3B8]">
                       {p.is_peg ? `30 ml ${money(p.peg_price)} · 60 ml ${money(Math.round(p.peg_price * 2 * 100) / 100)}` : p.description || p.category}
                     </div>
                     <div className="mt-2.5 flex items-center justify-between gap-1">
