@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { migrate, UPLOAD_DIR, q } from './db.js';
 import { optionalAuth } from './auth.js';
 import { sseHandler } from './events.js';
-import { seed } from './seed.js';
+import { seed, seedStation } from './seed.js';
 import { startJobs } from './jobs.js';
 import { lanAddresses } from './routes/tables.js';
 import authRoutes from './routes/auth.js';
@@ -25,7 +25,10 @@ const PORT = Number(process.env.PORT || 4000);
 const HOST = process.env.HOST || '0.0.0.0';
 
 migrate();
-if (!q.get('SELECT id FROM users LIMIT 1')) seed();
+if (!q.get('SELECT id FROM users LIMIT 1')) {
+  if (process.env.SEED_MODE === 'demo') seed();
+  else seedStation();
+}
 
 export const app = express();
 app.disable('x-powered-by');

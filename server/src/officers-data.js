@@ -2,7 +2,7 @@
 // Format: [service_no, rank, name, branch, tors, category, defaultRole]
 export const STATION_OFFICERS = [
   // Posted-in Officers (25)
-  ['27415', 'Gp Capt', 'Gaurav Sharma', 'AE(L)', '17-Aug-26', 'POSTED', 'member'],
+  ['27415', 'Gp Capt', 'Gaurav Sharma', 'AE(L)', '17-Aug-26', 'POSTED', 'commanding_officer'],
   ['22876', 'Gp Capt', 'SR Karwatkar', 'AE(L)', '4-Nov-24', 'POSTED', 'member'],
   ['26453', 'Gp Capt', 'Sanjay Kumar Sahu', 'AF(L)', '', 'POSTED', 'member'],
   ['26856', 'Wg Cdr', 'PK Teotia', 'AE(L)', '7-Sep-26', 'POSTED', 'member'],
@@ -16,9 +16,9 @@ export const STATION_OFFICERS = [
   ['29630', 'Wg Cdr', 'N Sriram', 'AE(L)', '', 'POSTED', 'member'],
   ['29649', 'Wg Cdr', 'TS Baba', 'AE(L)', '17-Feb-25', 'POSTED', 'member'],
   ['30063', 'Wg Cdr', 'Jagbir Singh', 'AE(L)', '', 'POSTED', 'member'],
-  ['30303', 'Wg Cdr', 'Khalid Parvej', 'AE(L)', '29-Jun-26', 'POSTED', 'member'],
+  ['30303', 'Wg Cdr', 'Khalid Parvej', 'AE(L)', '29-Jun-26', 'POSTED', 'mess_secretary'],
   ['30304', 'Wg Cdr', 'Vikas Kaushik', 'AE(L)', '', 'POSTED', 'member'],
-  ['30433', 'Wg Cdr', 'TK Rai', 'F(P)', '', 'POSTED', 'member'],
+  ['30433', 'Wg Cdr', 'TK Rai', 'F(P)', '', 'POSTED', 'bar_incharge'],
   ['30611', 'Wg Cdr', 'Jitesh Kumar', 'AE(L)', '3-Feb-25', 'POSTED', 'member'],
   ['30911', 'Wg Cdr', 'Somvir Singh', 'AE(M)', '27-Jan-25', 'POSTED', 'member'],
   ['31126', 'Wg Cdr', 'A Bedekar', 'F(P)', '23-Jun-25', 'POSTED', 'member'],

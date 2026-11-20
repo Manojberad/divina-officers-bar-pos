@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { q, tx, migrate, ALL_TABLES, UPLOAD_DIR, db } from './db.js';
 import { hashPin } from './auth.js';
 import { createOrder, transition, moveStock, getProduct, toBase, baseCost } from './services.js';
+import { STATION_OFFICERS } from './officers-data.js';
+import { STATION_ALCOHOL } from './alcohol-data.js';
+import { STATION_SUNDRIES } from './sundries-data.js';
 
 const svg = (label, color, kind) => {
   const shape = kind === 'bottle'
@@ -149,6 +152,126 @@ export function seed({ withOrders = true } = {}) {
   console.log('[seed] done');
 }
 
+const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+export function seedStation() {
+  console.log('[seed] loading station officers, categories & inventory…');
+  const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../assets/products');
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  if (fs.existsSync(ASSETS_DIR)) {
+    for (const f of fs.readdirSync(ASSETS_DIR)) {
+      if (/\.(jpg|jpeg|png|webp|svg)$/i.test(f)) {
+        fs.copyFileSync(path.join(ASSETS_DIR, f), path.join(UPLOAD_DIR, f));
+      }
+    }
+  }
+  const resolveImage = (name, fallback) => {
+    const realFile = `real-${slugify(name)}.jpg`;
+    if (fs.existsSync(path.join(UPLOAD_DIR, realFile))) return `/uploads/${realFile}`;
+    return `/uploads/${fallback}`;
+  };
+
+  tx(() => {
+    // Dedicated Super Admin & Station Bartenders
+    const adminId = Number(
+      q.run(
+        `INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, must_change_pin, active, approval_status)
+         VALUES('Administrator', 'ADMIN', 'Super Admin', NULL, 'admin@bar.local', 'STAFF', 'superadmin', ?, 0, 1, 'approved')`,
+        hashPin('ADMIN'),
+      ).lastInsertRowid,
+    );
+    q.run(
+      `INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, must_change_pin, active, approval_status)
+       VALUES('Sunny', '00000', 'Bartender', '9000000001', NULL, 'STAFF', 'bartender', ?, 0, 1, 'approved')`,
+      hashPin('00000'),
+    );
+    q.run(
+      `INSERT INTO users(name, service_no, rank, mobile, email, category, role, pin_hash, must_change_pin, active, approval_status)
+       VALUES('Urvesh', '11111', 'Civ', NULL, NULL, 'STAFF', 'bartender', ?, 0, 1, 'approved')`,
+      hashPin('11111'),
+    );
+
+    // All 59 Station Posted-In & Course Officers (incl. Super Admin & 3 Mess Appointments)
+    for (const [sn, rank, name, branch, tors, category, role] of STATION_OFFICERS) {
+      q.run(
+        `INSERT INTO users(name, service_no, rank, branch, tors, mobile, email, category, role, pin_hash, must_change_pin, active, approval_status)
+         VALUES(?,?,?,?,?,NULL,NULL,?,?,?,0,1,'approved')`,
+        name, sn, rank || null, branch || null, tors || null, category, role, hashPin(sn),
+      );
+    }
+
+    // All 5 Categories with configured profit margins
+    const catMap = {};
+    const marginMap = {};
+    CATS.forEach(([name, low, crit, margin], i) => {
+      q.run(
+        'INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin) VALUES(?,?,?,?,?)',
+        name, low, crit, i + 1, margin,
+      );
+      q.run(
+        'UPDATE categories SET low_threshold=?, critical_threshold=?, sort=?, profit_margin=? WHERE name=?',
+        low, crit, i + 1, margin, name,
+      );
+      catMap[name] = q.get('SELECT id FROM categories WHERE name=?', name).id;
+      marginMap[name] = margin;
+    });
+
+    // 6 QR Bar Tables
+    if (!q.get('SELECT id FROM tables LIMIT 1')) {
+      for (let i = 1; i <= 6; i++) {
+        q.run('INSERT INTO tables(name, code) VALUES(?,?)', `Table ${i}`, `t${i}${Math.random().toString(36).slice(2, 8)}`);
+      }
+    }
+
+    // 58 Alcohol Items (5% profit margin, exact Cellar + Loose 30ml stock)
+    const alcMargin = marginMap.Alcohol ?? 5;
+    for (const [, name, subCat, cellarQty, purchaseRate, looseQty, isPeg, sizeMl, unit, desc, imgFile, fav] of STATION_ALCOHOL) {
+      const sellingPrice = Math.round(purchaseRate * (1 + alcMargin / 100) * 100) / 100;
+      const pegPrice = isPeg && sizeMl > 0 ? Math.round((sellingPrice / (sizeMl / 30)) * 100) / 100 : 0;
+      const pid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?,1)`,
+          name, catMap.Alcohol, subCat, subCat, desc, resolveImage(name, imgFile), sizeMl, unit, isPeg, purchaseRate, sellingPrice, pegPrice, fav,
+        ).lastInsertRowid,
+      );
+      const p = getProduct(pid);
+      const unitCost = baseCost(p);
+      if (isPeg) {
+        if (cellarQty > 0) {
+          moveStock({ productId: pid, type: 'opening', qty: cellarQty * sizeMl, unitCost, userId: adminId, note: `Opening Cellar Stock: ${cellarQty} bottle(s)` });
+        }
+        if (looseQty > 0) {
+          moveStock({ productId: pid, type: 'opening', qty: looseQty * 30, unitCost, userId: adminId, note: `Opening Loose Counter Stock: ${looseQty} x 30ml pegs` });
+        }
+      } else {
+        const totalUnits = cellarQty + looseQty;
+        if (totalUnits > 0) {
+          moveStock({ productId: pid, type: 'opening', qty: totalUnits, unitCost, userId: adminId, note: `Opening Stock: ${cellarQty} cellar + ${looseQty} counter ${unit}(s)` });
+        }
+      }
+    }
+
+    // 54 Sundries Items (Soft Drinks 10%, Food 10%, Cigarettes 7.5%, Misc 0%)
+    for (const [, catName, subCat, foodType, name, unit, qty, purchaseRate, desc, imgFile, fav] of STATION_SUNDRIES) {
+      const m = marginMap[catName] ?? 0;
+      const sellingPrice = Math.round(purchaseRate * (1 + m / 100) * 100) / 100;
+      const pid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,?,?,?,?,?,0,?,0,?,?,0,0,?,1)`,
+          name, catMap[catName], subCat, foodType, subCat || catName, desc, resolveImage(name, imgFile), unit, purchaseRate, sellingPrice, fav,
+        ).lastInsertRowid,
+      );
+      if (qty > 0) {
+        const p = getProduct(pid);
+        moveStock({ productId: pid, type: 'opening', qty, unitCost: baseCost(p), userId: adminId, note: `Opening Sundries Stock: ${qty} ${unit}` });
+      }
+    }
+  });
+  console.log('[seed] station dataset ready (62 accounts, 5 categories, 112 products)');
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   migrate();
   if (process.argv.includes('--force')) {
@@ -157,5 +280,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     db.exec('PRAGMA foreign_keys = ON');
   }
   if (q.get('SELECT id FROM users LIMIT 1')) console.log('Database already has data. Use --force to reset.');
-  else seed({ withOrders: !process.argv.includes('--empty') });
+  else if (process.argv.includes('--demo')) seed({ withOrders: !process.argv.includes('--empty') });
+  else seedStation();
 }

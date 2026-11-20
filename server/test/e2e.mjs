@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx';
 // Isolated temp data directory so tests never touch production data
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bartill-test-'));
 process.env.DATA_DIR = tmp;
+process.env.SEED_MODE = 'demo';
 
 const { app } = await import('../src/index.js');
 const { q, db } = await import('../src/db.js');
