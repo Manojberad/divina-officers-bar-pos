@@ -181,47 +181,53 @@ export default function Inventory() {
 
       {(tab === 'purchase' || tab === 'wastage' || tab === 'history') && (
         <Card title={tab === 'purchase' ? 'Purchase register' : tab === 'wastage' ? 'Wastage & complimentary register' : 'Product-wise consumption & movement history'}
-          actions={<div className="flex flex-wrap gap-2"><Select value={prodFilter} onChange={(e) => setProdFilter(e.target.value)} className="!w-52 !min-h-9 !py-1"><option value="">All products</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select><DateRange from={range[0]} to={range[1]} onChange={(f, t) => setRange([f, t])} /></div>}>
-          <table className="w-full text-sm">
-            <thead className="text-left text-gray-500"><tr><th className="p-2">Date</th><th>Product</th><th>Type</th><th>Qty</th><th>Details</th><th>By</th><th className="text-right">Value</th></tr></thead>
-            <tbody>
-              {movements.filter((m) => (tab === 'purchase' ? ['purchase', 'opening'].includes(m.type) : tab === 'wastage' ? ['wastage', 'complimentary'].includes(m.type) : true)).map((m) => (
-                <tr key={m.id} className="border-t dark:border-gray-700">
-                  <td className="p-2">{fmtDate(m.at)}</td><td>{m.product}</td><td className="capitalize">{m.type}</td>
-                  <td className={m.qty < 0 ? 'text-red-500' : 'text-emerald-600'}>{m.qty > 0 ? '+' : ''}{m.qty_display} {m.is_peg ? `btl (${m.qty} ml)` : m.unit}</td>
-                  <td>{[m.supplier, m.invoice && `Inv ${m.invoice}`, m.order_no && `#${m.order_no}`, m.note].filter(Boolean).join(' · ')}</td>
-                  <td>{m.user_name || '—'}</td><td className="text-right">{m.value ? money(m.value) : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          actions={<div className="flex flex-wrap gap-2"><Select value={prodFilter} onChange={(e) => setProdFilter(e.target.value)} className="!w-full sm:!w-52 !min-h-9 !py-1"><option value="">All products</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select><DateRange from={range[0]} to={range[1]} onChange={(f, t) => setRange([f, t])} /></div>}>
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-gray-500"><tr><th className="p-2">Date</th><th>Product</th><th>Type</th><th>Qty</th><th>Details</th><th>By</th><th className="text-right">Value</th></tr></thead>
+              <tbody>
+                {movements.filter((m) => (tab === 'purchase' ? ['purchase', 'opening'].includes(m.type) : tab === 'wastage' ? ['wastage', 'complimentary'].includes(m.type) : true)).map((m) => (
+                  <tr key={m.id} className="border-t dark:border-gray-700">
+                    <td className="p-2">{fmtDate(m.at)}</td><td>{m.product}</td><td className="capitalize">{m.type}</td>
+                    <td className={m.qty < 0 ? 'text-red-500' : 'text-emerald-600'}>{m.qty > 0 ? '+' : ''}{m.qty_display} {m.is_peg ? `btl (${m.qty} ml)` : m.unit}</td>
+                    <td>{[m.supplier, m.invoice && `Inv ${m.invoice}`, m.order_no && `#${m.order_no}`, m.note].filter(Boolean).join(' · ')}</td>
+                    <td>{m.user_name || '—'}</td><td className="text-right">{m.value ? money(m.value) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 
       {tab === 'reconcile' && admin && (
-        <Card title="Physical stock reconciliation" actions={<div className="flex flex-wrap gap-2"><Input placeholder="🔍 Filter items…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-48 !min-h-9" /><Input placeholder="Reconciliation note" value={reconNote} onChange={(e) => setReconNote(e.target.value)} className="!w-56 !min-h-9" /><Button onClick={submitRecon}>Apply reconciliation</Button></div>}>
-          <table className="w-full text-sm">
-            <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>System stock</th><th>Physical count (bottles / units)</th><th>Difference</th></tr></thead>
-            <tbody>
-              {filteredProducts.map((p) => {
-                const v = counts[p.id] ?? '';
-                const diff = v === '' ? null : Math.round((Number(v) - p.stock_display) * 1000) / 1000;
-                return (
-                  <tr key={p.id} className="border-t dark:border-gray-700">
-                    <td className="p-2 font-semibold">{p.name}</td><td>{p.stock_display} {p.stock_unit}</td>
-                    <td><Input type="number" step="0.01" className="!w-36 !min-h-9 !py-1" value={v} onChange={(e) => setCounts({ ...counts, [p.id]: e.target.value })} placeholder={String(p.stock_display)} /></td>
-                    <td className={diff ? (diff < 0 ? 'font-bold text-red-500' : 'font-bold text-emerald-500') : ''}>{diff == null ? '—' : `${diff > 0 ? '+' : ''}${diff}`}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <Card title="Physical stock reconciliation" actions={<div className="flex flex-wrap gap-2"><Input placeholder="🔍 Filter items…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-full sm:!w-48 !min-h-9" /><Input placeholder="Reconciliation note" value={reconNote} onChange={(e) => setReconNote(e.target.value)} className="!w-full sm:!w-56 !min-h-9" /><Button onClick={submitRecon}>Apply reconciliation</Button></div>}>
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>System stock</th><th>Physical count (bottles / units)</th><th>Difference</th></tr></thead>
+              <tbody>
+                {filteredProducts.map((p) => {
+                  const v = counts[p.id] ?? '';
+                  const diff = v === '' ? null : Math.round((Number(v) - p.stock_display) * 1000) / 1000;
+                  return (
+                    <tr key={p.id} className="border-t dark:border-gray-700">
+                      <td className="p-2 font-semibold">{p.name}</td><td>{p.stock_display} {p.stock_unit}</td>
+                      <td><Input type="number" step="0.01" className="!w-32 sm:!w-36 !min-h-9 !py-1" value={v} onChange={(e) => setCounts({ ...counts, [p.id]: e.target.value })} placeholder={String(p.stock_display)} /></td>
+                      <td className={diff ? (diff < 0 ? 'font-bold text-red-500' : 'font-bold text-emerald-500') : ''}>{diff == null ? '—' : `${diff > 0 ? '+' : ''}${diff}`}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           {recons.length > 0 && (
             <div className="mt-6">
               <h4 className="mb-2 font-semibold">Previous reconciliations</h4>
-              <table className="w-full text-sm"><thead className="text-left text-gray-500"><tr><th>Date</th><th>Product</th><th>System</th><th>Physical</th><th>Diff</th><th>Note</th><th>By</th></tr></thead>
-                <tbody>{recons.map((r) => <tr key={r.id} className="border-t dark:border-gray-700"><td className="py-1">{fmtDate(r.at)}</td><td>{r.product}</td><td>{r.system_qty}</td><td>{r.physical_qty}</td><td className={r.diff < 0 ? 'text-red-500' : 'text-emerald-500'}>{r.diff}</td><td>{r.note}</td><td>{r.user_name}</td></tr>)}</tbody>
-              </table>
+              <div className="w-full overflow-x-auto">
+                <table className="w-full text-sm"><thead className="text-left text-gray-500"><tr><th>Date</th><th>Product</th><th>System</th><th>Physical</th><th>Diff</th><th>Note</th><th>By</th></tr></thead>
+                  <tbody>{recons.map((r) => <tr key={r.id} className="border-t dark:border-gray-700"><td className="py-1">{fmtDate(r.at)}</td><td>{r.product}</td><td>{r.system_qty}</td><td>{r.physical_qty}</td><td className={r.diff < 0 ? 'text-red-500' : 'text-emerald-500'}>{r.diff}</td><td>{r.note}</td><td>{r.user_name}</td></tr>)}</tbody>
+                </table>
+              </div>
             </div>
           )}
         </Card>

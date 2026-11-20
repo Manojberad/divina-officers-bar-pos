@@ -319,7 +319,7 @@ export default function OrdersBoard() {
   const editTotal = editItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
 
   return (
-    <div className="flex h-full flex-col gap-3 p-3">
+    <div className="flex flex-col gap-3 p-2 sm:p-3 lg:h-full">
       {/* Live Pending Guest Approvals Panel */}
       {guestReqs.length > 0 && (
         <Card className="!border-[#FBBF24] !bg-[#FBBF24]/10 !p-3.5">
@@ -370,7 +370,7 @@ export default function OrdersBoard() {
       </div>
 
       {tab !== 'history' ? (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="lg:min-h-0 lg:flex-1 lg:overflow-auto">
           <div className="mb-3 rounded-2xl bg-[#10B981]/10 px-4 py-2 text-xs font-semibold text-[#059669] dark:text-[#34D399]">
             ⚡ <b>Auto-Accept &amp; Auto-Bill Active:</b> Customer &amp; bar orders are automatically accepted, billed, and deducted from stock — no status clicks needed! Use <b>Edit Items</b> or <b>Cancel</b> only if an item is unavailable or needs changes.
           </div>
@@ -464,16 +464,17 @@ export default function OrdersBoard() {
           )}
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="lg:min-h-0 lg:flex-1 lg:overflow-auto">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <DateRange from={range[0]} to={range[1]} onChange={(f, t) => setRange([f, t])} />
             <select className="rounded-2xl border border-[#E0E5F2] bg-white px-3 py-2 text-sm dark:border-[#2E384D] dark:bg-[#151A25]" value={hstatus} onChange={(e) => setHstatus(e.target.value)}>
               <option value="">All statuses</option>
               {['closed', 'served', 'draft', 'cancelled', 'disputed'].map((s) => <option key={s}>{s}</option>)}
             </select>
-            <Input placeholder="Search order / customer / table" className="!w-64" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Input placeholder="Search order / customer / table" className="!w-full sm:!w-64" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <table className="w-full text-sm">
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-sm">
             <thead className="text-left text-xs font-bold uppercase tracking-wider text-[#94A3B8]">
               <tr><th className="p-2">Order</th><th>Date</th><th>Customer</th><th>Table</th><th>Items</th><th>Status</th><th>Payment</th><th>Approval</th><th className="text-right">Total</th></tr>
             </thead>
@@ -496,6 +497,7 @@ export default function OrdersBoard() {
               })}
             </tbody>
           </table>
+          </div>
           {hist.length === 0 && <Empty>No orders in range</Empty>}
         </div>
       )}

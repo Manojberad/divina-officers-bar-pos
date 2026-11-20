@@ -19,19 +19,19 @@ const ICONS: Record<string, ReactNode> = {
   '/settings': <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
 };
 
-const NAV: { to: string; label: string; roles: Role[] }[] = [
-  { to: '/dashboard', label: 'Main Dashboard', roles: ADMIN_ROLES },
-  { to: '/pos', label: 'Products', roles: STAFF_ROLES },
-  { to: '/orders', label: 'Orders Board', roles: STAFF_ROLES },
-  { to: '/order', label: 'Bar Menu', roles: ['member', 'customer', 'guest'] },
-  { to: '/favorite-orders', label: 'Favorite Orders', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
-  { to: '/my-orders', label: 'My Orders', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
-  { to: '/inventory', label: 'Inventory & Stock', roles: STAFF_ROLES },
-  { to: '/products', label: 'Products & Pricing', roles: ADMIN_ROLES },
-  { to: '/users', label: 'Officers & Users', roles: ADMIN_ROLES },
-  { to: '/tables', label: 'Tables & QR Codes', roles: ADMIN_ROLES },
-  { to: '/reports', label: 'Reports & Exports', roles: ADMIN_ROLES },
-  { to: '/settings', label: 'Admin Settings', roles: ADMIN_ROLES },
+const NAV: { to: string; label: string; short: string; roles: Role[] }[] = [
+  { to: '/dashboard', label: 'Main Dashboard', short: 'Home', roles: ADMIN_ROLES },
+  { to: '/pos', label: 'Products', short: 'Products', roles: STAFF_ROLES },
+  { to: '/orders', label: 'Orders Board', short: 'Orders', roles: STAFF_ROLES },
+  { to: '/order', label: 'Bar Menu', short: 'Menu', roles: ['member', 'customer', 'guest'] },
+  { to: '/favorite-orders', label: 'Favorite Orders', short: 'Favs', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
+  { to: '/my-orders', label: 'My Orders', short: 'Orders', roles: ['member', 'customer', 'guest', ...PRIVILEGED_OFFICER_ROLES, 'superadmin'] },
+  { to: '/inventory', label: 'Inventory & Stock', short: 'Stock', roles: STAFF_ROLES },
+  { to: '/products', label: 'Products & Pricing', short: 'Pricing', roles: ADMIN_ROLES },
+  { to: '/users', label: 'Officers & Users', short: 'Users', roles: ADMIN_ROLES },
+  { to: '/tables', label: 'Tables & QR Codes', short: 'Tables', roles: ADMIN_ROLES },
+  { to: '/reports', label: 'Reports & Exports', short: 'Reports', roles: ADMIN_ROLES },
+  { to: '/settings', label: 'Admin Settings', short: 'Settings', roles: ADMIN_ROLES },
 ];
 
 export default function Layout() {
@@ -45,6 +45,7 @@ export default function Layout() {
   const [c, setC] = useState({ ...conn });
   const [notes, setNotes] = useState<any[]>([]);
   const [showNotes, setShowNotes] = useState(false);
+  const [showMobileNotes, setShowMobileNotes] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [guestReqs, setGuestReqs] = useState<any[]>([]);
   const [showGuestModal, setShowGuestModal] = useState(false);
@@ -74,12 +75,16 @@ export default function Layout() {
 
   const unread = notes.filter((n) => !n.read).length;
   const pendingGuests = guestReqs.filter((g) => g.approval_status === 'pending');
+  const mobileAlertCount = unread + (isStaff ? pendingGuests.length : 0);
+
   const items = NAV.filter((n) => {
     if (!user || !n.roles.includes(user.role)) return false;
-    // Dedicated non-officer ADMIN account does not need personal My Orders / Favorite Orders tabs
     if ((n.to === '/my-orders' || n.to === '/favorite-orders') && user.role === 'superadmin' && user.category === 'STAFF') return false;
     return true;
   });
+
+  // Bottom bar shows up to 5 clean, non-scrolling tabs on mobile/tablet; full menu is in Hamburger drawer
+  const bottomItems = items.slice(0, 5);
   const currentTitle = items.find((i) => loc.pathname.startsWith(i.to))?.label || (loc.pathname === '/account' ? 'Profile & PIN' : settings.bar_name);
   const initials = (user?.name || 'U').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 
@@ -96,29 +101,87 @@ export default function Layout() {
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
+  const openMobileNotifications = () => {
+    setDrawerOpen(false);
+    setShowMobileNotes(true);
+    if (unread) api('/admin/notifications/read', { method: 'POST' }).then(loadNotes);
+  };
+
   const SidebarContent = (
     <div className="flex h-full flex-col bg-white dark:bg-[#1C2230]">
       {/* Brand Header */}
-      <div className="flex items-center gap-3 px-6 pt-7 pb-6">
-        <img src={settings.logo || '/Login_logo.png'} className="h-11 w-11 shrink-0 rounded-xl object-contain" alt="" />
-        <div className="min-w-0">
-          <div className="font-ubuntu truncate text-base font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3]">
-            {settings.bar_name || "DIVINA OFFICERS' BAR"}
+      <div className="flex items-center justify-between gap-2 px-5 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))] xl:px-6 xl:pb-6 xl:pt-7">
+        <div className="flex min-w-0 items-center gap-3">
+          <img src={settings.logo || '/Login_logo.png'} className="h-10 w-10 shrink-0 rounded-xl object-contain xl:h-11 xl:w-11" alt="" />
+          <div className="min-w-0">
+            <div className="font-ubuntu truncate text-sm font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] xl:text-base">
+              {settings.bar_name || "DIVINA OFFICERS' BAR"}
+            </div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-[#94A3B8]">Horizon POS</div>
           </div>
-          <div className="text-[11px] font-semibold uppercase tracking-widest text-[#94A3B8]">Horizon POS</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(false)}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#F4F7FE] text-lg font-bold text-[#1B2559] dark:bg-[#252D3D] dark:text-[#E6EDF3] xl:hidden"
+          aria-label="Close menu"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Mobile-ONLY Quick Controls (Status, Notifications, Theme Mode, Guest Requests) inside Hamburger Menu */}
+      <div className="mx-4 mb-3 space-y-2 rounded-2xl bg-[#F4F7FE] p-2.5 dark:bg-[#252D3D] md:hidden">
+        <div className="flex items-center justify-between px-1">
+          <span className={cx('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold', c.online ? 'bg-[#10B981]/15 text-[#10B981]' : 'bg-[#F87171]/15 text-[#F87171]')}>
+            <span className={cx('h-2 w-2 rounded-full', c.online ? 'bg-[#10B981]' : 'bg-[#F87171]')} />
+            {c.online ? 'Connected' : 'Offline'}{c.queued ? ` (${c.queued})` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={toggleDark}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-white px-2.5 py-1 text-xs font-bold text-[#1B2559] shadow-xs dark:bg-[#1C2230] dark:text-[#E6EDF3]"
+          >
+            <span>{dark ? '☀️ Light' : '🌙 Dark'}</span>
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-1.5">
+          <button
+            type="button"
+            onClick={openMobileNotifications}
+            className="flex w-full items-center justify-between rounded-xl bg-white px-3 py-2 text-xs font-bold text-[#1B2559] shadow-xs dark:bg-[#1C2230] dark:text-[#E6EDF3]"
+          >
+            <span className="flex items-center gap-2">🔔 Notifications</span>
+            {unread > 0 ? (
+              <span className="rounded-full bg-[#F87171] px-2 py-0.5 text-[10px] font-extrabold text-white">{unread} new</span>
+            ) : (
+              <span className="text-[11px] text-[#94A3B8]">{notes.length}</span>
+            )}
+          </button>
+          {isStaff && pendingGuests.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setDrawerOpen(false); loadGuestReqs(); setShowGuestModal(true); }}
+              className="flex w-full items-center justify-between rounded-xl bg-[#FBBF24] px-3 py-2 text-xs font-extrabold text-[#1B2559]"
+            >
+              <span>🪪 Guest Requests</span>
+              <span>{pendingGuests.length}</span>
+            </button>
+          )}
         </div>
       </div>
-      <div className="mx-6 mb-4 h-px bg-[#E9EDF7] dark:bg-[#2A3346]" />
+
+      <div className="mx-5 mb-3 h-px bg-[#E9EDF7] dark:bg-[#2A3346] xl:mx-6 xl:mb-4" />
 
       {/* Nav Links */}
-      <div className="flex-1 space-y-1 overflow-y-auto pl-6 pr-0">
+      <div className="flex-1 space-y-1 overflow-y-auto pl-5 pr-0 xl:pl-6">
         {items.map((n) => (
           <NavLink
             key={n.to}
             to={n.to}
             className={({ isActive }) =>
               cx(
-                'group relative flex items-center gap-3.5 py-3 pr-4 text-sm transition-colors',
+                'group relative flex items-center gap-3.5 py-2.5 pr-4 text-sm transition-colors xl:py-3',
                 isActive ? 'font-bold text-[#1B2559] dark:text-[#E6EDF3]' : 'font-medium text-[#707EAE] hover:text-[#1B2559] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]',
               )
             }
@@ -134,7 +197,7 @@ export default function Layout() {
                     {pendingGuests.length}
                   </span>
                 )}
-                {isActive && <span className="absolute right-0 top-1/2 h-9 w-1 -translate-y-1/2 rounded-l-full bg-[#422AFB] dark:bg-[#818CF8]" />}
+                {isActive && <span className="absolute right-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-l-full bg-[#422AFB] dark:bg-[#818CF8]" />}
               </>
             )}
           </NavLink>
@@ -145,7 +208,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => { setDrawerOpen(false); loadGuestReqs(); setShowGuestModal(true); }}
-            className="group relative flex w-full items-center gap-3.5 py-3 pr-4 text-left text-sm font-medium text-[#707EAE] transition-colors hover:text-[#1B2559] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]"
+            className="group relative flex w-full items-center gap-3.5 py-2.5 pr-4 text-left text-sm font-medium text-[#707EAE] transition-colors hover:text-[#1B2559] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3] xl:py-3"
           >
             <span className="text-[#94A3B8] group-hover:text-[#422AFB] dark:group-hover:text-[#818CF8]">
               <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-7 7v-1c0-2.66 5.33-4 7-4 .36 0 .74.02 1.13.06-.08.31-.13.62-.13.94 0 1.66 1.01 3.09 2.45 3.71-.91.19-1.91.29-2.95.29H5zm14.5-1.5-2.5 2.5-1.5-1.5 1-1 .5.5 1.5-1.5 1 1z" /></svg>
@@ -161,10 +224,10 @@ export default function Layout() {
       </div>
 
       {/* Officer Profile Card at Bottom */}
-      <div className="p-5">
+      <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] xl:p-5">
         <div className="horizon-gradient relative overflow-hidden rounded-[20px] p-4 text-white shadow-lg">
           <div className="relative z-10 flex items-center gap-3">
-            <button onClick={() => nav('/account')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20 text-sm font-extrabold backdrop-blur-xs">
+            <button onClick={() => { setDrawerOpen(false); nav('/account'); }} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20 text-sm font-extrabold backdrop-blur-xs">
               {initials}
             </button>
             <div className="min-w-0 flex-1">
@@ -181,10 +244,10 @@ export default function Layout() {
             </div>
           </div>
           <div className="relative z-10 mt-3 flex gap-2">
-            <button onClick={() => nav('/account')} className="flex-1 rounded-xl bg-white/20 py-1.5 text-xs font-bold backdrop-blur-xs transition hover:bg-white/30">
+            <button onClick={() => { setDrawerOpen(false); nav('/account'); }} className="flex-1 rounded-xl bg-white/20 py-1.5 text-xs font-bold backdrop-blur-xs transition hover:bg-white/30">
               Account
             </button>
-            <button onClick={() => { logout(); nav('/login'); }} className="flex-1 rounded-xl bg-black/25 py-1.5 text-xs font-bold transition hover:bg-black/40">
+            <button onClick={() => { setDrawerOpen(false); logout(); nav('/login'); }} className="flex-1 rounded-xl bg-black/25 py-1.5 text-xs font-bold transition hover:bg-black/40">
               Logout
             </button>
           </div>
@@ -194,45 +257,66 @@ export default function Layout() {
   );
 
   return (
-    <div className="flex h-full bg-[#F4F7FE] text-[#1B2559] dark:bg-[#131722] dark:text-[#E6EDF3]">
+    <div className="flex h-[100dvh] w-full max-w-full overflow-hidden bg-[#F4F7FE] text-[#1B2559] dark:bg-[#131722] dark:text-[#E6EDF3]">
       {/* Desktop Fixed Sidebar */}
       <aside className="no-print hidden w-[275px] shrink-0 border-r border-[#E9EDF7] dark:border-[#262E40] xl:block">
         {SidebarContent}
       </aside>
 
-      {/* Mobile / Tablet Slide-Over Drawer */}
+      {/* Mobile / Tablet Slide-Over Hamburger Drawer */}
       {drawerOpen && (
         <div className="no-print fixed inset-0 z-50 flex xl:hidden">
           <div className="fixed inset-0 bg-black/55 backdrop-blur-xs" onClick={() => setDrawerOpen(false)} />
-          <div className="relative z-10 h-full w-[280px] max-w-[82vw] shadow-2xl">
+          <div className="relative z-10 h-full w-[300px] max-w-[85vw] shadow-2xl">
             {SidebarContent}
           </div>
         </div>
       )}
 
       {/* Main Content Area */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Glassmorphic Floating Navbar */}
-        <header className="no-print sticky top-0 z-30 mx-3 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-[#131722]/80 sm:mx-5">
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-[#707EAE] dark:text-[#94A3B8]">
-              Pages <span className="mx-1">/</span> <span className="font-semibold text-[#1B2559] dark:text-[#E6EDF3]">{currentTitle}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-xl font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] sm:text-2xl">
-                {currentTitle}
-              </h1>
-              {showDesignationPill && (
-                <span className="hidden items-center gap-1 rounded-full bg-gradient-to-r from-[#D97706] to-[#F59E0B] px-2.5 py-0.5 text-[11px] font-extrabold text-white shadow-xs sm:inline-flex">
-                  {isAdminRole(user?.role) && '★ '}{designation}
-                </span>
-              )}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Top Navbar: Ultra-compact Hamburger Header on Mobile, Full Pill Toolbar on Tablet & Desktop */}
+        <header className="no-print z-30 mx-2 mt-[max(0.5rem,env(safe-area-inset-top))] flex shrink-0 items-center justify-between gap-2 rounded-2xl bg-white/90 px-3 py-2 backdrop-blur-xl dark:bg-[#1C2230]/90 md:mx-5 md:mt-3 md:bg-white/80 md:px-4 md:py-3 md:dark:bg-[#131722]/80">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {/* Compact Live Dot on Mobile */}
+            <span className={cx('h-2.5 w-2.5 shrink-0 rounded-full md:hidden', c.online ? 'bg-[#10B981]' : 'bg-[#F87171]')} title={c.online ? 'Connected' : 'Offline'} />
+            <div className="min-w-0">
+              <div className="hidden text-xs font-medium text-[#707EAE] dark:text-[#94A3B8] md:block">
+                Pages <span className="mx-1">/</span> <span className="font-semibold text-[#1B2559] dark:text-[#E6EDF3]">{currentTitle}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <h1 className="truncate text-base font-extrabold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] md:text-2xl">
+                  {currentTitle}
+                </h1>
+                {showDesignationPill && (
+                  <span className="hidden items-center gap-1 rounded-full bg-gradient-to-r from-[#D97706] to-[#F59E0B] px-2.5 py-0.5 text-[11px] font-extrabold text-white shadow-xs md:inline-flex">
+                    {isAdminRole(user?.role) && '★ '}{designation}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Right Pill Toolbar */}
-          <div className="horizon-pill-shadow flex items-center gap-1.5 rounded-full border border-transparent bg-white px-3 py-2 dark:border-[#2A3346] dark:bg-[#1C2230] sm:gap-2.5">
-            {/* Mobile / Tablet Menu Toggle */}
+          {/* MOBILE-ONLY: Single Space-Saving Hamburger Button (contains Notifications, Account, Color Mode, Navigation) */}
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#F4F7FE] text-[#1B2559] transition active:scale-95 dark:bg-[#252D3D] dark:text-[#E6EDF3] md:hidden"
+            aria-label="Open menu"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" className="h-5 w-5">
+              <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            {mobileAlertCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#EE5D50] px-1 text-[10px] font-extrabold text-white shadow-xs">
+                {mobileAlertCount}
+              </span>
+            )}
+          </button>
+
+          {/* TABLET & WEB ONLY: Full Right Pill Toolbar */}
+          <div className="horizon-pill-shadow hidden shrink-0 items-center gap-2 rounded-full border border-transparent bg-white px-3 py-2 dark:border-[#2A3346] dark:bg-[#1C2230] md:flex">
+            {/* Tablet Menu Toggle (md to xl) */}
             <button
               onClick={() => setDrawerOpen(true)}
               className="flex h-9 w-9 items-center justify-center rounded-full text-[#94A3B8] hover:bg-[#F4F7FE] hover:text-[#1B2559] dark:hover:bg-[#252D3D] dark:hover:text-[#E6EDF3] xl:hidden"
@@ -241,7 +325,7 @@ export default function Layout() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="h-5 w-5"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
 
-            {/* Instant Guest Approval Pill for Bartender & Admin on EVERY page */}
+            {/* Instant Guest Approval Pill for Bartender & Admin */}
             {isStaff && pendingGuests.length > 0 && (
               <button
                 onClick={() => { loadGuestReqs(); setShowGuestModal(true); }}
@@ -254,7 +338,7 @@ export default function Layout() {
             {/* Connection Status Pill */}
             <span className={cx('flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold', c.online ? 'bg-[#10B981]/15 text-[#10B981]' : 'bg-[#F87171]/15 text-[#F87171]')}>
               <span className={cx('h-2 w-2 rounded-full', c.online ? 'bg-[#10B981]' : 'bg-[#F87171]')} />
-              <span className="hidden sm:inline">{c.online ? 'Connected' : 'Offline'}</span>
+              <span>{c.online ? 'Connected' : 'Offline'}</span>
               {c.queued ? ` (${c.queued})` : ''}
             </span>
 
@@ -329,30 +413,56 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Main Scrollable Viewport */}
-        <main className="min-h-0 flex-1 overflow-auto px-2 pb-20 pt-2 sm:px-4 xl:pb-4">
+        {/* Single Smooth Scrollable Viewport (prevents iOS double scrollbars & horizontal overflow) */}
+        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 pb-[calc(5.25rem+env(safe-area-inset-bottom))] pt-1.5 sm:px-4 md:pt-2 xl:pb-4">
           <Outlet />
         </main>
 
-        {/* Mobile / Tablet Bottom Quick Navigation Bar */}
-        <nav className="no-print fixed bottom-0 left-0 right-0 z-30 flex overflow-x-auto border-t border-[#E9EDF7] bg-white/95 px-2 py-1.5 backdrop-blur-lg dark:border-[#2A3346] dark:bg-[#1C2230]/95 xl:hidden">
-          {items.map((n) => (
+        {/* Mobile / Tablet Bottom Quick Navigation Bar (iOS safe-area aware, zero horizontal scroll) */}
+        <nav className="no-print fixed bottom-0 left-0 right-0 z-30 flex w-full max-w-full items-center justify-around overflow-hidden border-t border-[#E9EDF7] bg-white/95 px-1 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-lg dark:border-[#2A3346] dark:bg-[#1C2230]/95 xl:hidden">
+          {bottomItems.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               className={({ isActive }) =>
                 cx(
-                  'flex min-w-[74px] flex-1 flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[11px] font-bold transition',
+                  'flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl py-1 text-[10px] font-bold transition sm:text-[11px]',
                   isActive ? 'text-[#422AFB] dark:text-[#818CF8]' : 'text-[#94A3B8]',
                 )
               }
             >
               {ICONS[n.to]}
-              <span className="truncate">{n.label.split(' ')[0]}</span>
+              <span className="max-w-full truncate px-1">{n.short}</span>
             </NavLink>
           ))}
         </nav>
       </div>
+
+      {/* Mobile Notifications Modal */}
+      <Modal open={showMobileNotes} onClose={() => setShowMobileNotes(false)} title="Notifications">
+        <div className="space-y-2">
+          {notes.length === 0 && <div className="py-6 text-center text-sm text-[#94A3B8]">No notifications</div>}
+          {notes.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              onClick={() => {
+                setShowMobileNotes(false);
+                if (isStaff && /guest registration/i.test(n.message)) {
+                  loadGuestReqs();
+                  setShowGuestModal(true);
+                } else if (n.link) {
+                  nav(n.link);
+                }
+              }}
+              className="block w-full rounded-2xl bg-[#F4F7FE] p-3 text-left text-sm dark:bg-[#252D3D]"
+            >
+              <div className="font-semibold text-[#1B2559] dark:text-[#E6EDF3]">{n.message}</div>
+              <div className="mt-0.5 text-xs text-[#94A3B8]">{fmtDate(n.at)}</div>
+            </button>
+          ))}
+        </div>
+      </Modal>
 
       {/* Global Guest Approval Center Modal (Bartender & Admin) */}
       <Modal open={showGuestModal} onClose={() => setShowGuestModal(false)} title="Guest Registration Approvals" wide>
@@ -400,7 +510,7 @@ export default function Layout() {
           {guestReqs.filter((g) => g.approval_status !== 'pending').length > 0 && (
             <div className="pt-2">
               <div className="mb-2 text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Recent Guests</div>
-              <div className="max-h-56 overflow-auto">
+              <div className="max-h-56 overflow-x-auto overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="text-left text-[#94A3B8]">
                     <tr><th className="py-1.5">Guest</th><th>Service No</th><th>Limit</th><th>Status</th><th>By</th></tr>

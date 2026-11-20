@@ -101,8 +101,8 @@ export default function QRMenu() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F7FE] dark:bg-[#131722]">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E9EDF7] bg-white px-4 py-3 dark:border-[#2A3346] dark:bg-[#1C2230]">
+    <div className="flex h-[100dvh] w-full max-w-full flex-col overflow-hidden bg-[#F4F7FE] dark:bg-[#131722]">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#E9EDF7] bg-white px-3 pb-2.5 pt-[max(0.65rem,env(safe-area-inset-top))] dark:border-[#2A3346] dark:bg-[#1C2230] sm:px-4">
         <div className="flex items-center gap-2.5">
           {data.bar.logo ? <img src={data.bar.logo} className="h-9 w-9 rounded-lg object-contain" alt="" /> : <span className="text-2xl">🍸</span>}
           <div>
@@ -143,7 +143,7 @@ export default function QRMenu() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
         {tab === 'menu' ? (
           <POS mode="qr" tableCode={code} preload={{ products: data.products, categories: data.categories }} onPlaced={() => { setTab('orders'); loadOrders(); }} />
         ) : (

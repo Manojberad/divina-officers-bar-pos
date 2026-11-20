@@ -79,10 +79,9 @@ export default function Login() {
 
   return (
     <div
-      className="login-scene relative flex h-full min-h-screen w-full items-center justify-center overflow-hidden bg-black bg-center bg-no-repeat md:justify-end"
+      className="login-scene relative flex min-h-[100dvh] w-full max-w-full items-center justify-center overflow-x-hidden overflow-y-auto bg-black bg-cover bg-center bg-no-repeat py-[max(1rem,env(safe-area-inset-top))] md:justify-end"
       style={{
         backgroundImage: `url("${bgImg}")`,
-        backgroundSize: '100% 100%',
         backgroundPosition: 'center center',
       }}
     >
@@ -224,25 +223,25 @@ export default function Login() {
         }
       `}</style>
 
-      <div className="relative z-10 flex w-full max-w-[490px] flex-col items-center px-5 py-5 md:mr-[5%] md:w-[42%] lg:mr-[6%]">
+      <div className="relative z-10 flex w-full max-w-[490px] flex-col items-center px-3.5 py-4 sm:px-5 sm:py-5 md:mr-[5%] md:w-[42%] lg:mr-[6%]">
         <form
           onSubmit={submit}
           method="post"
           autoComplete="on"
-          className={`login-panel w-full rounded-[28px] px-6 py-6 text-white sm:px-8 sm:py-7 ${shake ? 'anim-shake' : ''}`}
+          className={`login-panel w-full overflow-hidden rounded-[24px] px-4 py-5 text-white sm:rounded-[28px] sm:px-8 sm:py-7 ${shake ? 'anim-shake' : ''}`}
         >
           <div className="mb-3 flex justify-center">
             <img
               src={logoImg}
               alt="Divina Officers' Bar crest"
-              className="crest-glow h-28 w-28 select-none object-contain sm:h-32 sm:w-32"
+              className="crest-glow h-24 w-24 select-none object-contain sm:h-32 sm:w-32"
             />
           </div>
 
           {/* Winged Metallic Gold Title Emblem */}
-          <div className="flex items-center justify-center gap-2.5 sm:gap-3">
+          <div className="flex w-full items-center justify-center gap-1.5 sm:gap-3">
             {/* Left 3-Bar Tapered Gold Wing */}
-            <svg viewBox="0 0 64 26" className="h-5 w-11 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
+            <svg viewBox="0 0 64 26" className="h-3.5 w-7 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
               <defs>
                 <linearGradient id="wingGoldL" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#fff6cc" />
@@ -256,12 +255,12 @@ export default function Login() {
               <polygon points="27,19.5 64,19.5 64,24 33,24" fill="url(#wingGoldL)" />
             </svg>
 
-            <h1 className="gold-title font-ubuntu whitespace-nowrap text-center text-[21px] font-extrabold uppercase leading-none tracking-[.06em] sm:text-[26px]">
+            <h1 className="gold-title font-ubuntu whitespace-nowrap text-center text-[clamp(14px,4.5vw,21px)] font-extrabold uppercase leading-none tracking-[.04em] sm:text-[25px] sm:tracking-[.06em]">
               {titleText}
             </h1>
 
             {/* Right 3-Bar Tapered Gold Wing (Mirrored) */}
-            <svg viewBox="0 0 64 26" className="h-5 w-11 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
+            <svg viewBox="0 0 64 26" className="h-3.5 w-7 shrink-0 drop-shadow-[0_0_8px_rgba(255,190,65,0.45)] sm:h-6 sm:w-14" aria-hidden="true">
               <defs>
                 <linearGradient id="wingGoldR" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#fff6cc" />

@@ -16,10 +16,10 @@ export function Button({ variant = 'primary', size = 'md', className, ...p }: Bu
 }
 
 export const Card = ({ children, className, title, actions }: { children: ReactNode; className?: string; title?: ReactNode; actions?: ReactNode }) => (
-  <div className={cx('horizon-shadow rounded-[20px] border border-transparent bg-white p-5 dark:border-[#2A3346] dark:bg-[#1C2230]', className)}>
+  <div className={cx('horizon-shadow min-w-0 max-w-full rounded-[20px] border border-transparent bg-white p-3.5 sm:p-5 dark:border-[#2A3346] dark:bg-[#1C2230]', className)}>
     {(title || actions) && (
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-lg font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3]">{title}</h3>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-4">
+        <h3 className="min-w-0 text-base font-bold tracking-tight text-[#1B2559] dark:text-[#E6EDF3] sm:text-lg">{title}</h3>
         <div className="flex flex-wrap items-center gap-2">{actions}</div>
       </div>
     )}
@@ -36,7 +36,7 @@ export function Field({ label, children, hint }: { label: string; children: Reac
     </label>
   );
 }
-const inputCls = 'w-full rounded-2xl border border-[#E0E5F2] bg-white px-4 py-2.5 min-h-11 text-sm font-medium text-[#1B2559] placeholder:text-[#A3AED0] outline-none transition focus:border-[#422AFB] focus:ring-2 focus:ring-[#422AFB]/20 dark:border-[#2E384D] dark:bg-[#151A25] dark:text-[#E6EDF3] dark:placeholder:text-[#64748B] dark:focus:border-[#818CF8] dark:focus:ring-[#818CF8]/25';
+const inputCls = 'w-full rounded-2xl border border-[#E0E5F2] bg-white px-4 py-2.5 min-h-11 text-base sm:text-sm font-medium text-[#1B2559] placeholder:text-[#A3AED0] outline-none transition focus:border-[#422AFB] focus:ring-2 focus:ring-[#422AFB]/20 dark:border-[#2E384D] dark:bg-[#151A25] dark:text-[#E6EDF3] dark:placeholder:text-[#64748B] dark:focus:border-[#818CF8] dark:focus:ring-[#818CF8]/25';
 export const Input = (p: InputHTMLAttributes<HTMLInputElement>) => <input {...p} className={cx(inputCls, p.className)} />;
 export const Select = (p: SelectHTMLAttributes<HTMLSelectElement>) => <select {...p} className={cx(inputCls, p.className)} />;
 export const Textarea = (p: any) => <textarea {...p} className={cx(inputCls, p.className)} />;
@@ -45,10 +45,10 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 backdrop-blur-xs p-0 sm:items-center sm:p-4" onClick={onClose}>
-      <div className={cx('max-h-[92vh] w-full overflow-auto rounded-t-[24px] border border-transparent bg-white p-6 shadow-2xl dark:border-[#2E384D] dark:bg-[#1C2230] sm:rounded-[24px]', wide ? 'max-w-4xl' : 'max-w-lg')} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-[#1B2559] dark:text-[#E6EDF3]">{title}</h2>
-          <button onClick={onClose} className="rounded-xl bg-[#F4F7FE] px-3 py-1 text-xl leading-none text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3] dark:hover:bg-[#2E384D]" aria-label="Close">×</button>
+      <div className={cx('max-h-[90dvh] w-full overflow-y-auto overflow-x-hidden rounded-t-[24px] border border-transparent bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl dark:border-[#2E384D] dark:bg-[#1C2230] sm:rounded-[24px] sm:p-6', wide ? 'max-w-4xl' : 'max-w-lg')} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <h2 className="min-w-0 truncate text-base font-bold text-[#1B2559] dark:text-[#E6EDF3] sm:text-lg">{title}</h2>
+          <button onClick={onClose} className="shrink-0 rounded-xl bg-[#F4F7FE] px-3 py-1 text-xl leading-none text-[#1B2559] hover:bg-[#E9EDF7] dark:bg-[#252D3D] dark:text-[#E6EDF3] dark:hover:bg-[#2E384D]" aria-label="Close">×</button>
         </div>
         {children}
       </div>

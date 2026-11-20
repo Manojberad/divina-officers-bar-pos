@@ -42,6 +42,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
   const [opts, setOpts] = useState({ user_id: '', table_id: '', notes: '', type: 'ondemand', scheduled_at: '' });
   const [busy, setBusy] = useState(false);
   const [showCart, setShowCart] = useState(false);
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
 
   const load = () => {
     if (preload) return;
@@ -245,141 +246,237 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
     </div>
   );
 
+  const jumpToCategory = (nextCat: number | 'fav', nextSub = 'all') => {
+    setCat(nextCat);
+    setSubCat(nextSub);
+    setSearch('');
+    setShowQuickMenu(false);
+    document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const fabBottom = mode === 'qr' ? 'bottom-[calc(1rem+env(safe-area-inset-bottom))]' : 'bottom-[calc(4.75rem+env(safe-area-inset-bottom))]';
+
   return (
-    <div className="flex h-full min-h-0 gap-4 p-2">
-      <section className="flex min-w-0 flex-1 flex-col">
+    <div className="flex flex-col gap-3 p-1.5 sm:p-2 lg:h-full lg:min-h-0 lg:flex-row lg:gap-4">
+      <section className="flex min-w-0 flex-1 flex-col lg:min-h-0">
         {/* Live Alcohol Order Limit Bar for Guests & Limited Members */}
         {!staff && user?.alcohol_usage && user.alcohol_usage.limit > 0 && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#422AFB]/20 bg-[#422AFB]/10 px-4 py-2 text-xs font-bold text-[#1B2559] dark:border-[#818CF8]/25 dark:bg-[#6366F1]/15 dark:text-[#E6EDF3]">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#422AFB]/20 bg-[#422AFB]/10 px-3.5 py-2 text-xs font-bold text-[#1B2559] dark:border-[#818CF8]/25 dark:bg-[#6366F1]/15 dark:text-[#E6EDF3]">
             <span>
-              🥃 Alcohol Order Limit: <b>{user.alcohol_usage.limit}</b> {user.alcohol_usage.unit === 'small_eq' ? 'Small (30 ml) equivalents' : 'Small/Large pegs'} {user.alcohol_usage.scope === 'order' ? 'per order' : 'per day'}
+              🥃 Limit: <b>{user.alcohol_usage.limit}</b> {user.alcohol_usage.unit === 'small_eq' ? 'Small (30 ml) eq' : 'pegs'} / {user.alcohol_usage.scope}
             </span>
             {user.alcohol_usage.scope === 'day' && (
               <span className={user.alcohol_usage.remaining === 0 ? 'text-[#EE5D50]' : 'text-[#10B981]'}>
-                Used today: {user.alcohol_usage.used} · Remaining: {user.alcohol_usage.remaining}
+                Used: {user.alcohol_usage.used} · Left: {user.alcohol_usage.remaining}
               </span>
             )}
           </div>
         )}
-        {/* Search & Pill Category Bar (Favorites + 3 Main Categories: Alcohol, Soft Drinks, Food) */}
-        <div className="mb-3 space-y-2.5">
-          <Input placeholder="🔍  Search whisky, rum, wine, beer, soft drinks or food…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div className="no-scrollbar flex gap-2.5 overflow-x-auto pb-1">
-            {[{ id: 'fav' as const, name: '⭐ Favorites' }, ...categories].map((c: any) => (
+
+        {/* Search & Category Controls */}
+        <div className="mb-3 space-y-2">
+          <Input placeholder="🔍 Search whisky, rum, juice, snacks…" value={search} onChange={(e) => setSearch(e.target.value)} />
+
+          {/* MOBILE ONLY (< md): Favorites Button + Category Dropdown + Sub-Category Dropdown (ZERO horizontal scroll!) */}
+          <div className="space-y-2 md:hidden">
+            <div className="flex items-center gap-2">
               <button
-                key={String(c.id)}
-                onClick={() => { setCat(c.id); setSubCat('all'); setSearch(''); }}
+                type="button"
+                onClick={() => jumpToCategory('fav')}
                 className={cx(
-                  'whitespace-nowrap rounded-full px-5 py-2 text-sm font-bold transition-all',
-                  cat === c.id && !search.trim()
+                  'shrink-0 whitespace-nowrap rounded-2xl px-3.5 py-2.5 text-sm font-extrabold transition-all',
+                  cat === 'fav' && !search.trim()
                     ? 'bg-[#422AFB] text-white shadow-[0_6px_16px_rgba(99,102,241,0.28)] dark:bg-[#6366F1]'
-                    : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]',
+                    : 'border border-[#E0E5F2] bg-white text-[#1B2559] dark:border-[#2E384D] dark:bg-[#1C2230] dark:text-[#E6EDF3]',
                 )}
               >
-                {c.name}
+                ⭐ Favorites
               </button>
-            ))}
+              <Select
+                value={typeof cat === 'number' ? String(cat) : ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) jumpToCategory('fav');
+                  else jumpToCategory(Number(v), 'all');
+                }}
+                aria-label="Select product category"
+                className="min-w-0 flex-1 !font-bold"
+              >
+                <option value="">All Categories…</option>
+                {categories.map((c: any) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name} ({products.filter((p) => p.category_id === c.id).length})
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            {!search.trim() && isAlcoholCat && alcoholSubs.length > 0 && (
+              <Select
+                value={subCat}
+                onChange={(e) => setSubCat(e.target.value)}
+                aria-label="Select alcohol type"
+                className="!min-h-10 !py-2 !font-semibold"
+              >
+                <option value="all">All Alcohol ({products.filter((p) => p.category_id === cat).length})</option>
+                {alcoholSubs.map((sc) => (
+                  <option key={sc} value={sc}>
+                    {sc} ({products.filter((p) => p.category_id === cat && p.sub_category === sc).length})
+                  </option>
+                ))}
+              </Select>
+            )}
+
+            {!search.trim() && isSoftDrinksCat && (
+              <Select
+                value={subCat}
+                onChange={(e) => setSubCat(e.target.value)}
+                aria-label="Select soft drink type"
+                className="!min-h-10 !py-2 !font-semibold"
+              >
+                <option value="all">All Soft Drinks ({products.filter((p) => p.category_id === cat).length})</option>
+                {SOFT_SUB_ORDER.map((sc) => (
+                  <option key={sc} value={sc}>
+                    {sc} ({products.filter((p) => p.category_id === cat && p.sub_category === sc).length})
+                  </option>
+                ))}
+              </Select>
+            )}
+
+            {!search.trim() && isFoodCat && !isSoftDrinksCat && (
+              <Select
+                value={subCat}
+                onChange={(e) => setSubCat(e.target.value)}
+                aria-label="Select food type"
+                className="!min-h-10 !py-2 !font-semibold"
+              >
+                <option value="all">All Food ({products.filter((p) => p.category_id === cat).length})</option>
+                <option value="Packed">📦 Packed ({products.filter((p) => p.category_id === cat && resolveFoodSub(p) === 'Packed').length})</option>
+                <option value="Veg">🟢 Veg ({products.filter((p) => p.category_id === cat && resolveFoodSub(p) === 'Veg').length})</option>
+                <option value="Non-Veg">🔴 Non-Veg ({products.filter((p) => p.category_id === cat && resolveFoodSub(p) === 'Non-Veg').length})</option>
+              </Select>
+            )}
           </div>
 
-          {/* Alcohol Sub-Categories (Whisky, Rum, Vodka, Gin, Brandy, Wine, Beer) */}
-          {!search.trim() && isAlcoholCat && alcoholSubs.length > 0 && (
-            <div className="no-scrollbar flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setSubCat('all')}
-                className={cx(
-                  'rounded-full px-4 py-1.5 text-xs font-bold transition',
-                  subCat === 'all'
-                    ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
-                    : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
-                )}
-              >
-                All Alcohol ({products.filter((p) => p.category_id === cat).length})
-              </button>
-              {alcoholSubs.map((sc) => {
-                const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
-                return (
-                  <button
-                    key={sc}
-                    onClick={() => setSubCat(sc)}
-                    className={cx(
-                      'rounded-full px-4 py-1.5 text-xs font-bold transition',
-                      subCat === sc
-                        ? 'bg-[#D97706] text-white shadow-sm'
-                        : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
-                    )}
-                  >
-                    {sc} ({cnt})
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Soft Drinks Sub-Categories (Juices, Soda, Water) */}
-          {!search.trim() && isSoftDrinksCat && (
-            <div className="no-scrollbar flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setSubCat('all')}
-                className={cx(
-                  'rounded-full px-4 py-1.5 text-xs font-bold transition',
-                  subCat === 'all'
-                    ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
-                    : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
-                )}
-              >
-                All Soft Drinks ({products.filter((p) => p.category_id === cat).length})
-              </button>
-              {SOFT_SUB_ORDER.map((sc) => {
-                const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
-                return (
-                  <button
-                    key={sc}
-                    onClick={() => setSubCat(sc)}
-                    className={cx(
-                      'rounded-full px-4 py-1.5 text-xs font-bold transition',
-                      subCat === sc
-                        ? 'bg-[#0EA5E9] text-white shadow-sm'
-                        : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
-                    )}
-                  >
-                    {sc} ({cnt})
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Food Sub-Categories (Packed, Veg, Non-Veg) */}
-          {!search.trim() && isFoodCat && !isSoftDrinksCat && (
-            <div className="flex flex-wrap items-center gap-2">
-              {([['all', 'All Food'], ['Packed', '📦 Packed'], ['Veg', 'Veg'], ['Non-Veg', 'Non-Veg']] as const).map(([k, label]) => (
+          {/* TABLET & WEB ONLY (md+): Full Horizontal Category & Sub-Category Pill Bars */}
+          <div className="hidden space-y-2.5 md:block">
+            <div className="no-scrollbar flex flex-wrap gap-2 pb-0.5">
+              {[{ id: 'fav' as const, name: '⭐ Favorites' }, ...categories].map((c: any) => (
                 <button
-                  key={k}
-                  onClick={() => setSubCat(k)}
+                  key={String(c.id)}
+                  onClick={() => { setCat(c.id); setSubCat('all'); setSearch(''); }}
                   className={cx(
-                    'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition',
-                    subCat === k
-                      ? k === 'Veg'
-                        ? 'bg-emerald-600 text-white shadow-sm'
-                        : k === 'Non-Veg'
-                          ? 'bg-red-600 text-white shadow-sm'
-                          : k === 'Packed'
-                            ? 'bg-[#D97706] text-white shadow-sm'
-                            : 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
-                      : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                    'whitespace-nowrap rounded-full px-5 py-2 text-sm font-bold transition-all',
+                    cat === c.id && !search.trim()
+                      ? 'bg-[#422AFB] text-white shadow-[0_6px_16px_rgba(99,102,241,0.28)] dark:bg-[#6366F1]'
+                      : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8] dark:hover:text-[#E6EDF3]',
                   )}
                 >
-                  {k === 'Veg' && <VegMark type="veg" />}
-                  {k === 'Non-Veg' && <VegMark type="nonveg" />}
-                  <span>{label}</span>
+                  {c.name}
                 </button>
               ))}
             </div>
-          )}
+
+            {/* Alcohol Sub-Categories (Whisky, Rum, Vodka, Gin, Brandy, Wine, Beer) */}
+            {!search.trim() && isAlcoholCat && alcoholSubs.length > 0 && (
+              <div className="no-scrollbar flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setSubCat('all')}
+                  className={cx(
+                    'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                    subCat === 'all'
+                      ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                      : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                  )}
+                >
+                  All Alcohol ({products.filter((p) => p.category_id === cat).length})
+                </button>
+                {alcoholSubs.map((sc) => {
+                  const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
+                  return (
+                    <button
+                      key={sc}
+                      onClick={() => setSubCat(sc)}
+                      className={cx(
+                        'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                        subCat === sc
+                          ? 'bg-[#D97706] text-white shadow-sm'
+                          : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                      )}
+                    >
+                      {sc} ({cnt})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Soft Drinks Sub-Categories (Juices, Soda, Water) */}
+            {!search.trim() && isSoftDrinksCat && (
+              <div className="no-scrollbar flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setSubCat('all')}
+                  className={cx(
+                    'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                    subCat === 'all'
+                      ? 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                      : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                  )}
+                >
+                  All Soft Drinks ({products.filter((p) => p.category_id === cat).length})
+                </button>
+                {SOFT_SUB_ORDER.map((sc) => {
+                  const cnt = products.filter((p) => p.category_id === cat && p.sub_category === sc).length;
+                  return (
+                    <button
+                      key={sc}
+                      onClick={() => setSubCat(sc)}
+                      className={cx(
+                        'rounded-full px-4 py-1.5 text-xs font-bold transition',
+                        subCat === sc
+                          ? 'bg-[#0EA5E9] text-white shadow-sm'
+                          : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                      )}
+                    >
+                      {sc} ({cnt})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Food Sub-Categories (Packed, Veg, Non-Veg) */}
+            {!search.trim() && isFoodCat && !isSoftDrinksCat && (
+              <div className="flex flex-wrap items-center gap-2">
+                {([['all', 'All Food'], ['Packed', '📦 Packed'], ['Veg', 'Veg'], ['Non-Veg', 'Non-Veg']] as const).map(([k, label]) => (
+                  <button
+                    key={k}
+                    onClick={() => setSubCat(k)}
+                    className={cx(
+                      'inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition',
+                      subCat === k
+                        ? k === 'Veg'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : k === 'Non-Veg'
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : k === 'Packed'
+                              ? 'bg-[#D97706] text-white shadow-sm'
+                              : 'bg-[#1B2559] text-white dark:bg-[#E6EDF3] dark:text-[#131722]'
+                        : 'bg-white text-[#1B2559] hover:bg-[#E9EDF7] dark:border dark:border-[#2A3346] dark:bg-[#1C2230] dark:text-[#94A3B8]',
+                    )}
+                  >
+                    {k === 'Veg' && <VegMark type="veg" />}
+                    {k === 'Non-Veg' && <VegMark type="nonveg" />}
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Product Cards Grid */}
-        <div className="min-h-0 flex-1 overflow-auto pb-4">
+        {/* Product Cards Grid (single scroll on mobile, inner scroll on lg+ desktop) */}
+        <div className="pb-20 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pb-4">
           {(() => {
             const renderCard = (p: Product) => {
               const ft = p.sub_category === 'Non-Veg' || p.food_type === 'nonveg'
@@ -397,7 +494,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                   role="button"
                   title={stockTitle}
                   className={cx(
-                    'horizon-shadow group relative cursor-pointer overflow-hidden rounded-[20px] border border-transparent bg-white p-3 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230]',
+                    'horizon-shadow group relative min-w-0 cursor-pointer overflow-hidden rounded-[18px] border border-transparent bg-white p-2.5 text-left transition-all duration-150 hover:-translate-y-0.5 active:scale-[.98] dark:border-[#2A3346] dark:bg-[#1C2230] sm:rounded-[20px] sm:p-3',
                     isOut(p) && 'opacity-50',
                   )}
                 >
@@ -453,7 +550,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                     <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-[#D97706] dark:text-[#FBBF24]">
                       <span>📦 Packed ({packedItems.length})</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3.5 xl:grid-cols-4 2xl:grid-cols-5">
                       {packedItems.map(renderCard)}
                       {packedItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Packed items found</div>}
                     </div>
@@ -462,7 +559,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                     <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
                       <VegMark type="veg" /> <span>Veg ({vegItems.length})</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3.5 xl:grid-cols-4 2xl:grid-cols-5">
                       {vegItems.map(renderCard)}
                       {vegItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Veg items found</div>}
                     </div>
@@ -471,7 +568,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
                     <div className="mb-2.5 flex items-center gap-2 px-1 text-sm font-extrabold text-red-600 dark:text-red-400">
                       <VegMark type="nonveg" /> <span>Non-Veg ({nonVegItems.length})</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3.5 xl:grid-cols-4 2xl:grid-cols-5">
                       {nonVegItems.map(renderCard)}
                       {nonVegItems.length === 0 && <div className="col-span-full py-2 text-xs text-[#94A3B8]">No Non-Veg items found</div>}
                     </div>
@@ -481,7 +578,7 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
             }
 
             return (
-              <div className="grid auto-rows-max grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              <div className="grid auto-rows-max grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3.5 xl:grid-cols-4 2xl:grid-cols-5">
                 {shown.map(renderCard)}
                 {shown.length === 0 && <div className="col-span-full py-10 text-center text-sm font-medium text-[#94A3B8]">No products found</div>}
               </div>
@@ -495,18 +592,108 @@ export default function POS({ mode, tableCode, preload, onPlaced }: { mode: 'sta
         {cartPanel}
       </aside>
 
+      {/* MOBILE-ONLY Floating Quick Products / Categories Menu Button (mirrors Cart FAB) */}
+      <button
+        type="button"
+        onClick={() => setShowQuickMenu(true)}
+        className={cx(
+          'fixed left-3 z-30 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#1B2559] px-4 py-3 text-xs font-extrabold text-white shadow-xl transition active:scale-95 dark:bg-[#252D3D] md:hidden',
+          fabBottom,
+        )}
+      >
+        <span>☰</span>
+        <span>Quick Menu</span>
+      </button>
+
       {/* Floating Cart Pill on Mobile & Tablet */}
       <button
+        type="button"
         onClick={() => setShowCart(true)}
-        className="horizon-gradient fixed bottom-20 right-4 z-30 rounded-full px-6 py-3.5 text-sm font-extrabold text-white shadow-xl lg:hidden"
+        className={cx(
+          'horizon-gradient fixed right-3 z-30 rounded-full px-5 py-3 text-xs font-extrabold text-white shadow-xl transition active:scale-95 sm:px-6 sm:py-3.5 sm:text-sm lg:hidden',
+          fabBottom,
+        )}
       >
         🛒 {count} · {money(total)}
       </button>
 
+      {/* MOBILE-ONLY Quick Products / Categories Jump Bottom Sheet */}
+      <Modal open={showQuickMenu} onClose={() => setShowQuickMenu(false)} title="Quick Products Menu">
+        <div className="space-y-3.5">
+          <button
+            type="button"
+            onClick={() => jumpToCategory('fav')}
+            className={cx(
+              'flex w-full items-center justify-between rounded-2xl px-4 py-3 text-sm font-extrabold transition',
+              cat === 'fav'
+                ? 'bg-[#422AFB] text-white dark:bg-[#6366F1]'
+                : 'bg-[#F4F7FE] text-[#1B2559] dark:bg-[#252D3D] dark:text-[#E6EDF3]',
+            )}
+          >
+            <span>⭐ Favorites</span>
+            <span className="text-xs opacity-80">{products.filter((p) => p.favourite).length} items</span>
+          </button>
+
+          {categories.map((c: any) => {
+            const cname = String(c.name || '').toLowerCase();
+            const catProds = products.filter((p) => p.category_id === c.id);
+            const icon = cname === 'alcohol' ? '🥃' : cname.includes('soft') ? '🥤' : cname === 'food' ? '🍽' : cname === 'cigarettes' ? '🚬' : '🧊';
+            let subs: string[] = [];
+            if (cname === 'alcohol') {
+              const sSet = new Set(catProds.map((p) => p.sub_category).filter(Boolean) as string[]);
+              subs = [...ALCOHOL_SUB_ORDER.filter((x) => sSet.has(x)), ...[...sSet].filter((x) => !ALCOHOL_SUB_ORDER.includes(x))];
+            } else if (cname.includes('soft')) {
+              subs = SOFT_SUB_ORDER;
+            } else if (cname === 'food') {
+              subs = FOOD_SUB_ORDER;
+            }
+            return (
+              <div key={c.id} className="rounded-2xl border border-[#E9EDF7] bg-[#F4F7FE]/60 p-3 dark:border-[#2A3346] dark:bg-[#252D3D]/60">
+                <button
+                  type="button"
+                  onClick={() => jumpToCategory(c.id, 'all')}
+                  className="flex w-full items-center justify-between text-left text-sm font-extrabold text-[#1B2559] dark:text-[#E6EDF3]"
+                >
+                  <span>{icon} {c.name}</span>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-bold text-[#422AFB] dark:bg-[#1C2230] dark:text-[#818CF8]">
+                    {catProds.length}
+                  </span>
+                </button>
+                {subs.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {subs.map((sc) => {
+                      const cnt = cname === 'food'
+                        ? catProds.filter((p) => resolveFoodSub(p) === sc).length
+                        : catProds.filter((p) => p.sub_category === sc).length;
+                      const active = cat === c.id && subCat === sc;
+                      return (
+                        <button
+                          key={sc}
+                          type="button"
+                          onClick={() => jumpToCategory(c.id, sc)}
+                          className={cx(
+                            'rounded-full px-3 py-1.5 text-xs font-bold transition',
+                            active
+                              ? 'bg-[#422AFB] text-white dark:bg-[#6366F1]'
+                              : 'bg-white text-[#1B2559] shadow-2xs dark:bg-[#1C2230] dark:text-[#E6EDF3]',
+                          )}
+                        >
+                          {sc} ({cnt})
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Modal>
+
       {showCart && (
         <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs lg:hidden" onClick={() => setShowCart(false)}>
-          <div className="absolute bottom-0 right-0 top-0 w-full max-w-md bg-white dark:bg-[#1C2230]" onClick={(e) => e.stopPropagation()}>
-            <button className="absolute right-4 top-3.5 text-2xl text-[#94A3B8]" onClick={() => setShowCart(false)}>×</button>
+          <div className="absolute bottom-0 right-0 top-0 flex w-full max-w-md flex-col bg-white pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] dark:bg-[#1C2230]" onClick={(e) => e.stopPropagation()}>
+            <button className="absolute right-4 top-[max(0.85rem,env(safe-area-inset-top))] z-10 text-2xl text-[#94A3B8]" onClick={() => setShowCart(false)}>×</button>
             {cartPanel}
           </div>
         </div>
