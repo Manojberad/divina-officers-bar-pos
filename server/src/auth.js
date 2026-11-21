@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, q } from './db.js';
+import { DATA_DIR, q, now } from './db.js';
 
 // Secret is generated once per installation and stored locally.
 const secretFile = path.join(DATA_DIR, '.secret');
@@ -52,6 +52,26 @@ export function signToken(payload, hours = 12) {
   return `${body}.${sig}`;
 }
 
+/** Create a persistent DB session in user_sessions and return its signed auth token. */
+export function createSessionToken(user, hours = 12) {
+  const sid = crypto.randomBytes(16).toString('hex');
+  const created = now();
+  const expires = new Date(Date.now() + hours * 3600e3).toISOString();
+  q.run(
+    'INSERT INTO user_sessions(session_id, user_id, role, created_at, last_seen_at, expires_at, revoked) VALUES(?,?,?,?,?,?,0)',
+    sid, user.id, user.role, created, created, expires,
+  );
+  return signToken({ uid: user.id, role: user.role, sid }, hours);
+}
+
+export function revokeUserSessions(userId) {
+  q.run('UPDATE user_sessions SET revoked=1 WHERE user_id=? AND revoked=0', userId);
+}
+
+export function revokeSession(sessionId) {
+  if (sessionId) q.run('UPDATE user_sessions SET revoked=1 WHERE session_id=?', sessionId);
+}
+
 export function verifyToken(token) {
   if (!token) return null;
   const [body, sig] = String(token).split('.');
@@ -88,9 +108,16 @@ export function optionalAuth(req, _res, next) {
   const token = h.startsWith('Bearer ') ? h.slice(7) : req.query.token;
   const p = verifyToken(token);
   if (p) {
+    if (p.sid) {
+      const sess = q.get('SELECT id, revoked, expires_at FROM user_sessions WHERE session_id=? AND user_id=?', p.sid, p.uid);
+      if (!sess || sess.revoked || Date.parse(sess.expires_at) < Date.now()) {
+        return next();
+      }
+      q.run('UPDATE user_sessions SET last_seen_at=? WHERE id=?', now(), sess.id);
+    }
     const u = q.get('SELECT id, name, service_no, rank, branch, tors, role, category, active, approval_status, td_start_date, td_end_date, must_change_pin FROM users WHERE id=?', p.uid);
     if (u && u.active && u.approval_status === 'approved' && tdValidity(u).ok) {
-      req.user = { ...u, designation: roleLabel(u.role) };
+      req.user = { ...u, session_id: p.sid || null, designation: roleLabel(u.role) };
     }
   }
   next();

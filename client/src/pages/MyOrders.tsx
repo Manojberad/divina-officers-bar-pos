@@ -2,16 +2,20 @@ import { useEffect, useState } from 'react';
 import { api, subscribe } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Badge, Button, Card, Empty, Modal, Textarea, fmtDate } from '../components/ui';
-import { itemLabel } from './OrdersBoard';
+import { EditOrderModal, RepeatOrderModal } from '../components/OrderActions';
+import { itemLabel, OrderDetail } from './OrdersBoard';
 
 export default function MyOrders() {
   const { user, money, toast, settings } = useApp();
   const [orders, setOrders] = useState<any[]>([]);
   const [dispute, setDispute] = useState<any>(null);
   const [note, setNote] = useState('');
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [repeatTarget, setRepeatTarget] = useState<any>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
   const hours = Number(settings.approval_hours || 24);
 
-  const load = () => api(`/orders?limit=100${user ? `&user_id=${user.id}` : ''}`).then(setOrders).catch(() => {});
+  const load = () => api(`/orders?limit=100${user ? `&user_id=${user.id}` : ''}`, { cache: false }).then(setOrders).catch(() => {});
   useEffect(() => { load(); return subscribe((ev) => ev === 'order' && load()); }, [user?.id]);
 
   const approve = async (o: any) => {
@@ -42,7 +46,11 @@ export default function MyOrders() {
                 <div className="flex justify-between font-semibold"><span>{o.order_no} · {fmtDate(o.closed_at)}</span><span>{money(o.total)}</span></div>
                 <ul className="text-sm">{o.items.map((i: any) => <li key={i.id}>{itemLabel(i)} — {money(i.line_total)}</li>)}</ul>
                 <div className="mt-1 text-xs text-gray-500">Approval window closes in {Math.ceil(remaining(o) / 3600e3)} h</div>
-                <div className="mt-2 flex gap-2"><Button variant="success" onClick={() => approve(o)}>✔ Approve</Button><Button variant="ghost" onClick={() => setDispute(o)}>Report discrepancy</Button></div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button variant="success" onClick={() => approve(o)}>✔ Approve</Button>
+                  {o.can_edit && <Button variant="subtle" onClick={() => setEditTarget(o)}>✏️ Edit Order</Button>}
+                  <Button variant="ghost" onClick={() => setDispute(o)}>Report discrepancy</Button>
+                </div>
               </div>
             ))}
           </div>
@@ -54,7 +62,10 @@ export default function MyOrders() {
           {orders.map((o) => (
             <div key={o.id} className="py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{o.order_no}</span><Badge s={o.status} />
+                <button type="button" onClick={() => setDetailId(o.id)} className="font-semibold hover:text-[#422AFB] hover:underline dark:hover:text-[#818CF8]">
+                  {o.order_no}
+                </button>
+                <Badge s={o.status} />
                 {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge>}
                 {o.approval_status !== 'na' && <Badge s={o.approval_status}>{o.approval_status === 'expired' ? 'approval expired' : o.approval_status}</Badge>}
                 {o.type === 'prebooked' && <Badge s="accepted">Pre-Order {fmtDate(o.scheduled_at)}</Badge>}
@@ -64,6 +75,19 @@ export default function MyOrders() {
               {o.dispute_note && <div className="text-sm text-fuchsia-500">Dispute: {o.dispute_note}</div>}
               {o.resolution_note && <div className="text-sm text-emerald-500">Resolution: {o.resolution_note}</div>}
               <div className="mt-1.5 flex flex-wrap gap-2">
+                {o.can_edit && (
+                  <Button size="sm" variant="subtle" onClick={() => setEditTarget(o)}>
+                    ✏️ Edit Order
+                  </Button>
+                )}
+                {o.items?.length > 0 && (
+                  <Button size="sm" variant="primary" onClick={() => setRepeatTarget(o)}>
+                    🔁 Repeat
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setDetailId(o.id)}>
+                  Details
+                </Button>
                 {['draft', 'placed'].includes(o.status) && <Button size="sm" variant="ghost" onClick={() => cancel(o)}>Cancel</Button>}
                 {o.items?.length > 0 && (
                   <Button
@@ -97,6 +121,9 @@ export default function MyOrders() {
         <Textarea rows={4} placeholder="Describe what is wrong (e.g. I was charged for 2 pegs but had 1)" value={note} onChange={(e: any) => setNote(e.target.value)} />
         <div className="mt-3 flex justify-end"><Button variant="danger" disabled={!note.trim()} onClick={sendDispute}>Submit dispute</Button></div>
       </Modal>
+      <EditOrderModal order={editTarget} onClose={() => setEditTarget(null)} onSaved={() => load()} />
+      <RepeatOrderModal order={repeatTarget} onClose={() => setRepeatTarget(null)} onPlaced={() => load()} />
+      <OrderDetail id={detailId} onClose={() => setDetailId(null)} onEdit={(o) => setEditTarget(o)} onChanged={() => load()} />
     </div>
   );
 }

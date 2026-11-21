@@ -1,11 +1,31 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, subscribe } from '../lib/api';
 import { useApp } from '../lib/app';
 import { homeFor } from '../App';
 
+const PENDING_GUEST_KEY = 'divinabar_pending_guest';
+interface PendingGuest {
+  service_no: string;
+  rank: string;
+  name: string;
+  request_token: string;
+  returnTo: string;
+  submitted_at: string;
+}
+
+function readPendingGuest(): PendingGuest | null {
+  try {
+    const raw = localStorage.getItem(PENDING_GUEST_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (p?.service_no && p?.request_token) return p as PendingGuest;
+    return null;
+  } catch { return null; }
+}
+
 export default function Login() {
-  const { login, settings, toast } = useApp();
+  const { login, establishSession, settings, toast } = useApp();
   const nav = useNavigate();
   const loc = useLocation() as any;
 
@@ -22,17 +42,111 @@ export default function Login() {
   const [err, setErr] = useState('');
   const [shake, setShake] = useState(false);
   const [focusedField, setFocusedField] = useState<'sn' | 'pin' | null>(null);
-  const [guestOpen, setGuestOpen] = useState(false);
+  const [pendingGuest, setPendingGuest] = useState<PendingGuest | null>(() => readPendingGuest());
+  const [guestOpen, setGuestOpen] = useState(() => !!readPendingGuest());
+  const [claimOffline, setClaimOffline] = useState(false);
+  const [checkingClaim, setCheckingClaim] = useState(false);
   const [gForm, setGForm] = useState({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
   const [gMsg, setGMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [gBusy, setGBusy] = useState(false);
+  const claimingRef = useRef(false);
+
+  const clearPendingGuest = useCallback(() => {
+    localStorage.removeItem(PENDING_GUEST_KEY);
+    setPendingGuest(null);
+    setClaimOffline(false);
+  }, []);
+
+  const checkGuestClaim = useCallback(async (pg: PendingGuest, manual = false) => {
+    if (claimingRef.current) return;
+    claimingRef.current = true;
+    if (manual) setCheckingClaim(true);
+    try {
+      const r = await api('/auth/guest-claim', {
+        method: 'POST',
+        body: { service_no: pg.service_no, request_token: pg.request_token },
+        cache: false,
+      });
+      setClaimOffline(false);
+      if (r.status === 'approved' && r.token && r.user) {
+        localStorage.removeItem(PENDING_GUEST_KEY);
+        setPendingGuest(null);
+        await establishSession(r.token, r.user);
+        toast(r.message || 'Your access has been approved. Welcome!');
+        nav(pg.returnTo || homeFor(r.user.role), { replace: true });
+      } else if (manual) {
+        setGMsg({ type: 'ok', text: 'Still awaiting bartender approval — you will enter automatically once approved.' });
+      }
+    } catch (e: any) {
+      if (e?.status === 0) {
+        setClaimOffline(true);
+      } else if ([401, 403, 404, 410].includes(e?.status)) {
+        localStorage.removeItem(PENDING_GUEST_KEY);
+        setPendingGuest(null);
+        setClaimOffline(false);
+        setGuestOpen(true);
+        setGMsg({ type: 'err', text: e.message || 'Your guest access request was declined, revoked, or expired.' });
+      }
+    } finally {
+      claimingRef.current = false;
+      if (manual) setCheckingClaim(false);
+    }
+  }, [establishSession, nav, toast]);
+
+  useEffect(() => {
+    if (!pendingGuest) return;
+    checkGuestClaim(pendingGuest, false);
+    const un = subscribe((ev, d) => {
+      if (ev === 'guest_request' && (!d?.service_no || String(d.service_no).toLowerCase() === pendingGuest.service_no.toLowerCase())) {
+        checkGuestClaim(pendingGuest, false);
+      }
+    });
+    const timer = setInterval(() => checkGuestClaim(pendingGuest, false), 3000);
+    const onOnline = () => checkGuestClaim(pendingGuest, false);
+    const onVis = () => { if (!document.hidden) checkGuestClaim(pendingGuest, false); };
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      un();
+      clearInterval(timer);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [pendingGuest, checkGuestClaim]);
 
   const registerGuest = async (e: React.FormEvent) => {
     e.preventDefault();
     setGBusy(true);
     setGMsg(null);
     try {
-      const r = await api('/auth/guest-register', { method: 'POST', body: gForm });
+      const fromPath = String(loc.state?.from || '');
+      const m = fromPath.match(/^\/menu\/([^/?#]+)/);
+      const r = await api('/auth/guest-register', {
+        method: 'POST',
+        body: { ...gForm, ...(m ? { table_code: decodeURIComponent(m[1]) } : {}) },
+      });
+      if (r.status === 'approved' && r.token && r.user) {
+        clearPendingGuest();
+        await establishSession(r.token, r.user);
+        toast(r.message || 'Your access has been approved. Welcome!');
+        nav(loc.state?.from || homeFor(r.user.role), { replace: true });
+        return;
+      }
+      if (r.status === 'pending' && r.request_token) {
+        const pg: PendingGuest = {
+          service_no: r.user?.service_no || gForm.service_no.trim(),
+          rank: r.user?.rank || gForm.rank.trim(),
+          name: r.user?.name || gForm.name.trim(),
+          request_token: r.request_token,
+          returnTo: loc.state?.from || '/order',
+          submitted_at: new Date().toISOString(),
+        };
+        localStorage.setItem(PENDING_GUEST_KEY, JSON.stringify(pg));
+        setPendingGuest(pg);
+        setGForm({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
+        setGMsg(null);
+        return;
+      }
       setGMsg({ type: 'ok', text: r.message || 'Registration submitted! Waiting for bartender approval.' });
       setGForm({ service_no: '', rank: '', name: '', mobile: '', pin: '' });
     } catch (e: any) {
@@ -497,7 +611,20 @@ export default function Login() {
             )}
           </button>
 
-          <div className="mt-5 text-center">
+          <div className="mt-5 text-center space-y-2.5">
+            {pendingGuest && (
+              <button
+                type="button"
+                onClick={() => setGuestOpen(true)}
+                className="flex w-full items-center justify-between gap-2 rounded-xl border border-amber-400/60 bg-amber-500/15 px-4 py-2.5 text-left text-xs font-semibold text-amber-100 transition hover:bg-amber-500/25"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 animate-ping rounded-full bg-amber-300" />
+                  <span>Awaiting approval for <b>{pendingGuest.rank} {pendingGuest.name}</b>…</span>
+                </span>
+                <span className="shrink-0 font-bold text-[#ffe8a0]">View →</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { setGMsg(null); setGuestOpen(true); }}
@@ -509,39 +636,97 @@ export default function Login() {
         </form>
       </div>
 
-      {/* Gold-Themed Guest Self-Registration Modal */}
+      {/* Gold-Themed Guest Self-Registration & Live Auto-Login Approval Modal */}
       {guestOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs" onClick={() => setGuestOpen(false)}>
-          <form
-            onSubmit={registerGuest}
-            onClick={(e) => e.stopPropagation()}
-            className="login-panel w-full max-w-md rounded-[26px] p-6 text-white sm:p-7"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="gold-title font-ubuntu text-xl font-extrabold tracking-wider">GUEST REGISTRATION</h3>
-              <button type="button" onClick={() => setGuestOpen(false)} className="rounded-full px-2.5 py-1 text-xl text-[#e7c98f] hover:bg-white/10">×</button>
-            </div>
-            <p className="mb-4 text-xs text-[#d8d4cc]">
-              Register with your Service No., Rank & Name. The bartender will approve your request (notified to Admin). Checkout is settled via Cash or UPI.
-            </p>
-            <div className="space-y-3">
-              <input type="text" required placeholder="Service Number *" value={gForm.service_no} onChange={(e) => setGForm({ ...gForm, service_no: e.target.value })} autoCapitalize="characters" className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
-              <input type="text" required placeholder="Rank * (e.g. Maj, Capt, Wg Cdr, Mr/Ms)" value={gForm.rank} onChange={(e) => setGForm({ ...gForm, rank: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
-              <input type="text" required placeholder="Full Name *" value={gForm.name} onChange={(e) => setGForm({ ...gForm, name: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
-              <div className="grid grid-cols-2 gap-2.5">
-                <input type="text" placeholder="Mobile (optional)" value={gForm.mobile} onChange={(e) => setGForm({ ...gForm, mobile: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
-                <input type="password" placeholder="PIN (blank = Service No)" value={gForm.pin} onChange={(e) => setGForm({ ...gForm, pin: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+          {pendingGuest ? (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="login-panel w-full max-w-md rounded-[26px] p-6 text-white sm:p-7"
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="gold-title font-ubuntu text-xl font-extrabold tracking-wider">AWAITING APPROVAL</h3>
+                <button type="button" onClick={() => setGuestOpen(false)} className="rounded-full px-2.5 py-1 text-xl text-[#e7c98f] hover:bg-white/10">×</button>
               </div>
+
+              <div className="flex flex-col items-center py-3 text-center">
+                <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-[#ffc65c]/50 bg-[#ffc65c]/15">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ffc65c]/25" />
+                  <span className="text-2xl">⏳</span>
+                </div>
+                <div className="mt-4 text-base font-bold text-[#fffaf0]">
+                  {pendingGuest.rank ? `${pendingGuest.rank} ` : ''}{pendingGuest.name}
+                </div>
+                <div className="mt-0.5 text-xs text-[#e7c98f]">
+                  Service No: <b>{pendingGuest.service_no}</b>
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-[#d8d4cc]">
+                  Your access request has been sent to the bartender. Please keep this page open — <b>you will be logged in automatically</b> as soon as your request is approved.
+                </p>
+              </div>
+
+              {claimOffline && (
+                <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-950/60 px-3 py-2 text-center text-xs text-amber-200">
+                  Connection interrupted — automatically reconnecting and checking approval…
+                </div>
+              )}
+
               {gMsg && (
-                <div className={`rounded-xl px-3 py-2 text-center text-xs font-medium ${gMsg.type === 'ok' ? 'border border-emerald-400/40 bg-emerald-950/70 text-emerald-200' : 'border border-red-400/40 bg-red-950/70 text-red-200'}`}>
+                <div className={`mt-2 rounded-xl px-3 py-2 text-center text-xs font-medium ${gMsg.type === 'ok' ? 'border border-emerald-400/40 bg-emerald-950/70 text-emerald-200' : 'border border-red-400/40 bg-red-950/70 text-red-200'}`}>
                   {gMsg.text}
                 </div>
               )}
-              <button type="submit" disabled={gBusy} className="gold-button mt-2 flex h-11 w-full items-center justify-center rounded-xl text-sm font-extrabold">
-                {gBusy ? 'Submitting…' : 'Submit for Bartender Approval'}
-              </button>
+
+              <div className="mt-5 flex flex-col gap-2">
+                <button
+                  type="button"
+                  disabled={checkingClaim}
+                  onClick={() => checkGuestClaim(pendingGuest, true)}
+                  className="gold-button flex h-11 w-full items-center justify-center rounded-xl text-sm font-extrabold disabled:opacity-60"
+                >
+                  {checkingClaim ? 'Checking approval…' : 'Check Approval Status Now'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { clearPendingGuest(); setGMsg(null); }}
+                  className="h-10 w-full rounded-xl border border-white/15 bg-white/5 text-xs font-semibold text-[#d8d4cc] transition hover:bg-white/10"
+                >
+                  Cancel &amp; Register with Different Details
+                </button>
+              </div>
             </div>
-          </form>
+          ) : (
+            <form
+              onSubmit={registerGuest}
+              onClick={(e) => e.stopPropagation()}
+              className="login-panel w-full max-w-md rounded-[26px] p-6 text-white sm:p-7"
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="gold-title font-ubuntu text-xl font-extrabold tracking-wider">GUEST REGISTRATION</h3>
+                <button type="button" onClick={() => setGuestOpen(false)} className="rounded-full px-2.5 py-1 text-xl text-[#e7c98f] hover:bg-white/10">×</button>
+              </div>
+              <p className="mb-4 text-xs text-[#d8d4cc]">
+                Register with your Service No., Rank &amp; Name. Once the bartender approves, you will be automatically logged in to order. Checkout is settled via Cash or UPI.
+              </p>
+              <div className="space-y-3">
+                <input type="text" required placeholder="Service Number *" value={gForm.service_no} onChange={(e) => setGForm({ ...gForm, service_no: e.target.value })} autoCapitalize="characters" className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                <input type="text" required placeholder="Rank * (e.g. Maj, Capt, Wg Cdr, Mr/Ms)" value={gForm.rank} onChange={(e) => setGForm({ ...gForm, rank: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                <input type="text" required placeholder="Full Name *" value={gForm.name} onChange={(e) => setGForm({ ...gForm, name: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                <div className="grid grid-cols-2 gap-2.5">
+                  <input type="text" placeholder="Mobile (optional)" value={gForm.mobile} onChange={(e) => setGForm({ ...gForm, mobile: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                  <input type="password" placeholder="PIN (blank = Service No)" value={gForm.pin} onChange={(e) => setGForm({ ...gForm, pin: e.target.value })} className="gold-input h-11 w-full rounded-xl px-3.5 text-sm" />
+                </div>
+                {gMsg && (
+                  <div className={`rounded-xl px-3 py-2 text-center text-xs font-medium ${gMsg.type === 'ok' ? 'border border-emerald-400/40 bg-emerald-950/70 text-emerald-200' : 'border border-red-400/40 bg-red-950/70 text-red-200'}`}>
+                    {gMsg.text}
+                  </div>
+                )}
+                <button type="submit" disabled={gBusy} className="gold-button mt-2 flex h-11 w-full items-center justify-center rounded-xl text-sm font-extrabold">
+                  {gBusy ? 'Submitting…' : 'Submit for Bartender Approval'}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
     </div>

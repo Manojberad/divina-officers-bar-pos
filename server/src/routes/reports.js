@@ -313,6 +313,56 @@ export const REPORTS = {
       sum: ['qty', 'total_purchase_cost', 'total_selling_value', 'profit'],
     }),
   },
+  shifts: {
+    title: 'Shift-wise Sales & Handover Report',
+    build: (F, T) => ({
+      columns: [
+        C('shift_id', 'Shift #', 'int'),
+        C('bartender', 'Bartender'),
+        C('status', 'Status'),
+        C('started', 'Started At'),
+        C('ended', 'Ended At'),
+        C('orders', 'Billed Orders', 'int'),
+        C('ongoing', 'Ongoing', 'int'),
+        C('member_bill', 'Member Bill', 'money'),
+        C('guest_cash', 'Guest Cash', 'money'),
+        C('guest_upi', 'Guest UPI', 'money'),
+        C('revenue', 'Total Sales', 'money'),
+        C('note', 'Handover / Notes'),
+      ],
+      rows: q.all(
+        `SELECT s.id _id, s.id shift_id, s.bartender_name bartender, s.status, s.started_at, s.ended_at,
+                s.opening_note, s.closing_note,
+                COALESCE(SUM(CASE WHEN o.status IN ('closed','disputed') THEN 1 ELSE 0 END), 0) orders,
+                COALESCE(SUM(CASE WHEN o.status IN ('draft','placed','accepted','preparing','served') THEN 1 ELSE 0 END), 0) ongoing,
+                COALESCE(SUM(CASE WHEN o.status IN ('closed','disputed') AND o.payment_mode IS NULL THEN o.total ELSE 0 END), 0) member_bill,
+                COALESCE(SUM(CASE WHEN o.status IN ${SOLD} AND o.payment_mode='cash' THEN o.total ELSE 0 END), 0) guest_cash,
+                COALESCE(SUM(CASE WHEN o.status IN ${SOLD} AND o.payment_mode='upi' THEN o.total ELSE 0 END), 0) guest_upi,
+                COALESCE(SUM(CASE WHEN o.status IN ${SOLD} THEN o.total ELSE 0 END), 0) revenue
+         FROM shifts s
+         LEFT JOIN orders o ON o.shift_id = s.id
+         WHERE s.started_at >= ? AND s.started_at < ?
+         GROUP BY s.id
+         ORDER BY s.id DESC`,
+        F, T,
+      ).map((x) => ({
+        _id: x._id,
+        shift_id: x.shift_id,
+        bartender: x.bartender,
+        status: String(x.status || '').toUpperCase(),
+        started: local(x.started_at),
+        ended: x.ended_at ? local(x.ended_at) : 'Active',
+        orders: x.orders,
+        ongoing: x.ongoing,
+        member_bill: round(x.member_bill),
+        guest_cash: round(x.guest_cash),
+        guest_upi: round(x.guest_upi),
+        revenue: round(x.revenue),
+        note: [x.opening_note, x.closing_note].filter(Boolean).join(' · '),
+      })),
+      sum: ['orders', 'ongoing', 'member_bill', 'guest_cash', 'guest_upi', 'revenue'],
+    }),
+  },
 };
 
 function movements(F, T, types) {

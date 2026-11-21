@@ -4,7 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { migrate, UPLOAD_DIR, q } from './db.js';
+import { migrate, UPLOAD_DIR, q, verifyDbHealth, flushAndCloseDb } from './db.js';
 import { optionalAuth } from './auth.js';
 import { sseHandler } from './events.js';
 import { seed, seedStation } from './seed.js';
@@ -19,12 +19,14 @@ import tableRoutes from './routes/tables.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reportRoutes from './routes/reports.js';
 import adminRoutes from './routes/admin.js';
+import shiftRoutes from './routes/shifts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
 const HOST = process.env.HOST || '0.0.0.0';
 
 migrate();
+verifyDbHealth();
 if (!q.get('SELECT id FROM users LIMIT 1')) {
   if (process.env.SEED_MODE === 'demo') seed();
   else seedStation();
@@ -45,6 +47,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/shifts', shiftRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -80,10 +83,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = key && cert ? https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, app) : http.createServer(app);
   server.listen(PORT, HOST, () => {
     const proto = key && cert ? 'https' : 'http';
-    console.log(`\n  DivinaBar server running (offline, single authoritative DB)`);
+    const orderCount = q.get('SELECT COUNT(*) n FROM orders').n;
+    const prodCount = q.get('SELECT COUNT(*) n FROM products').n;
+    const shiftCount = q.get('SELECT COUNT(*) n FROM shifts').n;
+    console.log(`\n  DivinaBar server running (offline, persistent SQLite WAL)`);
+    console.log(`  Recovered: ${orderCount} orders · ${prodCount} products · ${shiftCount} shifts`);
     console.log(`  Local:   ${proto}://localhost:${PORT}`);
     lanAddresses().forEach((a) => console.log(`  Network: ${proto}://${a}:${PORT}`));
     console.log('');
   });
   startJobs();
+
+  const gracefulShutdown = (sig) => {
+    console.log(`\n[server] ${sig} received — flushing database WAL & shutting down cleanly…`);
+    server.close(() => {
+      flushAndCloseDb();
+      process.exit(0);
+    });
+    setTimeout(() => { flushAndCloseDb(); process.exit(0); }, 3000).unref();
+  };
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }

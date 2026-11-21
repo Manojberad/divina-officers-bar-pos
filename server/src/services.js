@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { q, tx, now, getSettings, audit, notify } from './db.js';
 import { broadcast } from './events.js';
-import { localToday, tdValidity, STAFF, isAdmin } from './auth.js';
+import { localToday, tdValidity, STAFF, isAdmin, roleLabel } from './auth.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -240,12 +240,29 @@ export function priceItem(p, item, _settings, isStaff, isParty = false) {
 
 export function loadOrder(id) {
   const o = q.get(`SELECT o.*, u.name customer_name, u.service_no customer_service_no, u.rank customer_rank,
-      u.role customer_role, u.category customer_category, t.name table_name, cb.name created_by_name
+      u.role customer_role, u.category customer_category, t.name table_name, cb.name created_by_name,
+      sh.bartender_name shift_bartender_name
     FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id
-    LEFT JOIN users cb ON cb.id=o.created_by WHERE o.id=?`, id);
+    LEFT JOIN users cb ON cb.id=o.created_by LEFT JOIN shifts sh ON sh.id=o.shift_id WHERE o.id=?`, id);
   if (!o) return null;
   o.items = q.all('SELECT * FROM order_items WHERE order_id=?', id);
   return o;
+}
+
+export function canEditOrder(o, user, settings = getSettings()) {
+  if (!user || !o) return { ok: false, status: 403, reason: 'Unauthorized' };
+  if (o.status === 'cancelled') return { ok: false, status: 409, reason: 'Cancelled orders cannot be edited' };
+  if (STAFF.includes(user.role)) return { ok: true };
+  if (o.user_id !== user.id) return { ok: false, status: 403, reason: 'You can only edit your own orders' };
+  if (['draft', 'placed', 'accepted', 'preparing', 'served'].includes(o.status)) return { ok: true };
+  if (o.status === 'closed' && o.approval_status === 'pending' && !o.payment_mode) {
+    const hours = Number(settings.approval_hours || 24);
+    if (o.closed_at && Date.now() - Date.parse(o.closed_at) > hours * 3600e3) {
+      return { ok: false, status: 409, reason: 'This order is locked because its approval window has expired' };
+    }
+    return { ok: true };
+  }
+  return { ok: false, status: 409, reason: 'This order is already settled, approved, or locked and cannot be edited' };
 }
 
 function nextOrderNo() {
@@ -256,7 +273,7 @@ function nextOrderNo() {
   return `${prefix}-${String(n).padStart(4, '0')}`;
 }
 
-export function getAlcoholUsage(targetUser, settings = getSettings()) {
+export function getAlcoholUsage(targetUser, settings = getSettings(), excludeOrderId = null) {
   if (!targetUser) return { limit: 0, used: 0, scope: settings.alcohol_limit_scope || 'day', unit: settings.alcohol_limit_unit || 'pegs' };
   const scope = settings.alcohol_limit_scope === 'order' ? 'order' : 'day';
   const unit = settings.alcohol_limit_unit === 'small_eq' ? 'small_eq' : 'pegs';
@@ -273,12 +290,19 @@ export function getAlcoholUsage(targetUser, settings = getSettings()) {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
     const expr = unit === 'small_eq' ? 'CASE WHEN i.serve_type=\'peg\' THEN i.qty * (COALESCE(i.peg_ml, 30) / 30.0) ELSE 0 END' : 'CASE WHEN i.serve_type=\'peg\' THEN i.qty ELSE 0 END';
-    const row = q.get(
-      `SELECT COALESCE(SUM(${expr}), 0) n
-       FROM order_items i JOIN orders o ON o.id=i.order_id
-       WHERE o.user_id=? AND o.status NOT IN ('cancelled','draft') AND o.created_at>=?`,
-      targetUser.id, startOfDay.toISOString(),
-    );
+    const row = excludeOrderId != null
+      ? q.get(
+        `SELECT COALESCE(SUM(${expr}), 0) n
+         FROM order_items i JOIN orders o ON o.id=i.order_id
+         WHERE o.user_id=? AND o.id<>? AND o.status NOT IN ('cancelled','draft') AND o.created_at>=?`,
+        targetUser.id, excludeOrderId, startOfDay.toISOString(),
+      )
+      : q.get(
+        `SELECT COALESCE(SUM(${expr}), 0) n
+         FROM order_items i JOIN orders o ON o.id=i.order_id
+         WHERE o.user_id=? AND o.status NOT IN ('cancelled','draft') AND o.created_at>=?`,
+        targetUser.id, startOfDay.toISOString(),
+      );
     used = Math.round((row?.n || 0) * 100) / 100;
   }
   return { limit, used, remaining: limit > 0 ? Math.max(0, Math.round((limit - used) * 100) / 100) : null, scope, unit };
@@ -355,14 +379,29 @@ export function createOrder(body, user) {
   validateStockRequirements(expanded.stockByProduct, settings.allow_negative_stock === '1');
   const total = Math.round(items.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
 
+  let autoStartedShift = null;
   const id = tx(() => {
     const t = now();
+    let openShift = q.get("SELECT id, bartender_name FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1");
+    if (!openShift && isStaff && user) {
+      const label = `${user.rank ? `${user.rank} ` : ''}${user.name}`;
+      const sid = Number(
+        q.run(
+          "INSERT INTO shifts(bartender_id, bartender_name, started_at, status, opening_note, started_by) VALUES(?,?,?,'open','Auto-started on first order',?)",
+          user.id, label, t, user.id,
+        ).lastInsertRowid,
+      );
+      openShift = { id: sid, bartender_name: label };
+      autoStartedShift = openShift;
+      audit(user.id, 'shift.auto_start', 'shift', sid, { bartender_id: user.id, bartender_name: label });
+    }
+    const shiftId = openShift?.id ?? null;
     const closedAt = status === 'closed' ? t : null;
     const approvalStatus = status === 'closed' ? (userId ? 'pending' : 'na') : 'na';
     const r = q.run(
-      `INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, type, scheduled_at, status, source, notes, total, is_party, payment_mode, payment_ref, closed_at, approval_status, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      nextOrderNo(), body.client_uuid || crypto.randomUUID(), userId, user?.id ?? null, tableId,
+      `INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, shift_id, type, scheduled_at, status, source, notes, total, is_party, payment_mode, payment_ref, closed_at, approval_status, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      nextOrderNo(), body.client_uuid || crypto.randomUUID(), userId, user?.id ?? null, tableId, shiftId,
       type, type === 'prebooked' ? new Date(body.scheduled_at).toISOString() : null, status, body.source || (isStaff ? 'pos' : 'self'),
       body.notes || null, total, isParty ? 1 : 0, normPay, body.payment_ref ? String(body.payment_ref).trim() : null, closedAt, approvalStatus, t, t,
     );
@@ -380,41 +419,72 @@ export function createOrder(body, user) {
     return oid;
   });
   const order = loadOrder(id);
+  if (autoStartedShift) broadcast('shift', { action: 'started', shift_id: autoStartedShift.id, bartender_name: autoStartedShift.bartender_name });
   broadcast('order', { id, user_id: order.user_id, status: order.status, action: 'created' });
   return { order, duplicate: false };
 }
 
-/** Bartender or Admin edits items/quantities of an order (e.g. item unavailable) with atomic stock adjustment. */
+/** Authorized user (Staff on any non-cancelled order; Member/Guest on own open/unsettled/unapproved order) edits items/quantities with atomic stock adjustment & audit trail. */
 export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
-  if (!user || !STAFF.includes(user.role)) throw new HttpError(403, 'Only bartender or admin can edit orders');
+  if (!user) throw new HttpError(401, 'Please log in');
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new HttpError(400, 'Order must keep at least one item — cancel the order to remove all items');
   }
   const settings = getSettings();
+  const isStaff = STAFF.includes(user.role);
+  let notifyStaff = false;
   const updated = tx(() => {
     const o = loadOrder(orderId);
     if (!o) throw new HttpError(404, 'Order not found');
-    if (o.status === 'cancelled') throw new HttpError(409, 'Cannot edit a cancelled order');
+    const perm = canEditOrder(o, user, settings);
+    if (!perm.ok) throw new HttpError(perm.status || 403, perm.reason);
 
+    const existingPidSet = new Set((o.items || []).map((it) => Number(it.product_id)));
     const newItems = rawItems.map((it) => {
       const p = getProduct(Number(it.product_id));
       if (!p) throw new HttpError(400, 'Product not found');
-      return priceItem(p, it, settings, true, !!o.is_party);
+      if (!p.active && !existingPidSet.has(p.id)) throw new HttpError(400, `${p.name} is currently unavailable`);
+      return priceItem(p, it, settings, isStaff, !!o.is_party);
     });
 
+    // Enforce alcohol limit for non-staff edits (excluding this order's own existing pegs)
+    if (!isStaff && o.user_id && o.status !== 'draft') {
+      const targetUser = q.get('SELECT id, name, role, category, alcohol_limit FROM users WHERE id=?', o.user_id);
+      if (targetUser) {
+        const usage = getAlcoholUsage(targetUser, settings, o.id);
+        if (usage.limit > 0) {
+          const incoming = newItems.reduce((sum, i) => {
+            if (i.serve_type !== 'peg') return sum;
+            return sum + (usage.unit === 'small_eq' ? i.qty * ((i.peg_ml || 30) / 30) : i.qty);
+          }, 0);
+          if (incoming > 0 && usage.used + incoming > usage.limit + 1e-9) {
+            const unitLabel = usage.unit === 'small_eq' ? 'Small (30 ml) equivalents' : 'Small/Large pegs';
+            const scopeLabel = usage.scope === 'day' ? 'per day' : 'per order';
+            const rLabel = targetUser.role === 'guest' ? 'Guest' : 'Member';
+            throw new HttpError(
+              400,
+              `${rLabel} alcohol limit exceeded: maximum ${usage.limit} ${unitLabel} ${scopeLabel} allowed${usage.used > 0 ? ` (other orders today: ${usage.used}, this order: ${incoming})` : ` (requested: ${incoming})`}.`,
+            );
+          }
+        }
+      }
+    }
+
     const t = now();
+    const allowNeg = settings.allow_negative_stock === '1';
+    const newExpanded = expandStockRequirements(newItems);
     if (o.stock_deducted) {
-      const oldRows = q.all("SELECT product_id, SUM(ABS(qty)) qty FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id", o.id);
-      const oldMap = new Map(oldRows.map((r) => [Number(r.product_id), Number(r.qty)]));
-      const newExpanded = expandStockRequirements(newItems);
+      const oldRows = q.all("SELECT product_id, SUM(ABS(qty)) qty, COUNT(*) cnt FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id", o.id);
+      const oldMap = new Map(oldRows.map((r) => [Number(r.product_id), { qty: Number(r.qty), cnt: Number(r.cnt) }]));
       const newMap = new Map([...newExpanded.stockByProduct.entries()].map(([pid, info]) => [pid, info.qty]));
       const allPids = new Set([...oldMap.keys(), ...newMap.keys()]);
-      const allowNeg = settings.allow_negative_stock === '1';
       for (const pid of allPids) {
-        const oldQty = oldMap.get(pid) || 0;
+        const oldEntry = oldMap.get(pid);
+        const oldQty = oldEntry?.qty || 0;
         const newQty = newMap.get(pid) || 0;
-        const delta = newQty - oldQty; // positive = deduct more; negative = return stock
+        const delta = newQty - oldQty; // positive = deduct more; negative = restore stock
         const p = getProduct(pid);
+        if (!p) continue;
         if (Math.abs(delta) > 1e-9) {
           if (!allowNeg && p.stock - delta < -1e-9) {
             const info = newExpanded.stockByProduct.get(pid);
@@ -427,7 +497,10 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
         const noteStr = info?.notes?.length ? `Order ${o.order_no} (edited; ${info.notes.join('; ')})` : `Order ${o.order_no} (edited)`;
         if (newQty <= 1e-9) {
           q.run("DELETE FROM stock_movements WHERE order_id=? AND product_id=? AND type='sale'", o.id, pid);
-        } else if (oldQty <= 1e-9) {
+        } else if (oldQty <= 1e-9 || (oldEntry?.cnt || 0) > 1) {
+          if ((oldEntry?.cnt || 0) > 1) {
+            q.run("DELETE FROM stock_movements WHERE order_id=? AND product_id=? AND type='sale'", o.id, pid);
+          }
           q.run(
             `INSERT INTO stock_movements(product_id, type, qty, unit_cost, order_id, note, user_id, at)
              VALUES(?, 'sale', ?, ?, ?, ?, ?, ?)`,
@@ -445,6 +518,9 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
       recordRecipeConsumptions(o.id, newExpanded.consumptions, t);
       q.run('DELETE FROM misc_transactions WHERE order_id=?', o.id);
       recordMiscTransactions(o.id, newExpanded.miscEntries, user.id, t);
+    } else {
+      // Order hasn't deducted stock yet (e.g. draft pre-order): validate availability against current stock
+      validateStockRequirements(newExpanded.stockByProduct, allowNeg);
     }
 
     const total = Math.round(newItems.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
@@ -456,12 +532,26 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
     const nextNotes = notes !== undefined ? (notes || null) : o.notes;
     const nextApproval = o.status === 'closed' && o.user_id ? 'pending' : o.approval_status;
     q.run('UPDATE orders SET total=?, notes=?, approval_status=?, updated_at=? WHERE id=?', total, nextNotes, nextApproval, t, o.id);
-    const evMsg = `Edited by ${user.name}${reason ? `: ${reason}` : ''} (₹${o.total} → ₹${total})`;
+    const actorLabel = `${user.name} (${roleLabel(user.role)})`;
+    const evMsg = `Edited by ${actorLabel}${reason ? `: ${reason}` : ''} (₹${o.total} → ₹${total})`;
     q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', o.id, o.status, o.status, user.id, evMsg, t);
-    audit(user.id, 'order.edit', 'order', o.id, { old_total: o.total, new_total: total, reason });
+    if (!isStaff) {
+      notify('bartender', null, `Order #${o.order_no} modified by ${actorLabel} (₹${o.total} → ₹${total})`, `/orders?id=${o.id}`);
+      notifyStaff = true;
+    }
+    audit(user.id, 'order.edit', 'order', o.id, {
+      edited_by: actorLabel,
+      edited_at: t,
+      old_total: o.total,
+      new_total: total,
+      old_items: (o.items || []).map((i) => ({ product_id: i.product_id, name: i.name, serve_type: i.serve_type, peg_ml: i.peg_ml, qty: i.qty, line_total: i.line_total })),
+      new_items: newItems.map((i) => ({ product_id: i.product_id, name: i.name, serve_type: i.serve_type, peg_ml: i.peg_ml, qty: i.qty, line_total: i.line_total })),
+      reason,
+    });
     return loadOrder(o.id);
   });
   broadcast('order', { id: orderId, user_id: updated.user_id, status: updated.status, action: 'edited' });
+  if (notifyStaff) broadcast('notification', {});
   return updated;
 }
 

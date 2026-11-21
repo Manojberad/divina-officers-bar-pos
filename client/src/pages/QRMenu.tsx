@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, subscribe } from '../lib/api';
 import { useApp } from '../lib/app';
 import { Badge, Button, Card, fmtDate } from '../components/ui';
+import { EditOrderModal, RepeatOrderModal } from '../components/OrderActions';
 import POS from './POS';
 import { itemLabel } from './OrdersBoard';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -15,6 +16,8 @@ export default function QRMenu() {
   const [viewMode, setViewMode] = useState<'choose' | 'view'>('choose');
   const [tab, setTab] = useState<'menu' | 'orders'>('menu');
   const [orders, setOrders] = useState<any[]>([]);
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [repeatTarget, setRepeatTarget] = useState<any>(null);
 
   useEffect(() => { api(`/menu/${code}`).then(setData).catch((e) => setErr(e.message)); }, [code]);
   const loadOrders = () => user && api('/orders?limit=20', { cache: false }).then(setOrders).catch(() => {});
@@ -140,12 +143,24 @@ export default function QRMenu() {
                 </div>
                 <div className="text-xs text-[#94A3B8]">{fmtDate(o.created_at)} · {o.table_name}</div>
                 <ul className="mt-2 text-sm">{o.items.map((i: any) => <li key={i.id}>{itemLabel(i)} — {money(i.line_total)}</li>)}</ul>
-                <div className="mt-2 text-right font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[#E9EDF7] pt-2.5 dark:border-[#2A3346]">
+                  <div className="flex flex-wrap gap-2">
+                    {o.can_edit && (
+                      <Button size="sm" variant="subtle" onClick={() => setEditTarget(o)}>✏️ Edit Order</Button>
+                    )}
+                    {o.items?.length > 0 && (
+                      <Button size="sm" variant="primary" onClick={() => setRepeatTarget(o)}>🔁 Repeat</Button>
+                    )}
+                  </div>
+                  <div className="font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</div>
+                </div>
               </Card>
             ))}
           </div>
         )}
       </div>
+      <EditOrderModal order={editTarget} onClose={() => setEditTarget(null)} onSaved={() => loadOrders()} />
+      <RepeatOrderModal order={repeatTarget} tableCode={code} onClose={() => setRepeatTarget(null)} onPlaced={() => loadOrders()} />
     </div>
   );
 }

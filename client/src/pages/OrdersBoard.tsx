@@ -72,6 +72,7 @@ export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | n
             <span>Table: <b className="text-[#1B2559] dark:text-[#E6EDF3]">{o.table_name || '—'}</b></span>
             <span>Created: {fmtDate(o.created_at)}</span>
             <span>By: {o.created_by_name || '—'}</span>
+            {o.shift_id && <span className="col-span-2">Shift: <b className="text-[#1B2559] dark:text-[#E6EDF3]">#{o.shift_id}{o.shift_bartender_name ? ` (${o.shift_bartender_name})` : ''}</b></span>}
           </div>
           <table className="w-full">
             <tbody>
@@ -101,6 +102,11 @@ export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | n
               {o.events?.map((e: any) => <li key={e.id}>{fmtDate(e.at)} · {e.from_status ? `${e.from_status} → ` : ''}<b>{e.to_status}</b> · {e.user_name || 'system'}{e.note ? ` · ${e.note}` : ''}</li>)}
             </ul>
           </div>
+          {!isStaffRole(user?.role) && o.can_edit && onEdit && (
+            <div className="flex justify-end border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
+              <Button variant="subtle" onClick={() => { onClose(); onEdit(o); }}>✏️ Edit Order</Button>
+            </div>
+          )}
           {isStaffRole(user?.role) && o.status !== 'cancelled' && (
             <div className="space-y-3 border-t border-[#E9EDF7] pt-3 dark:border-[#2A3346]">
               {isGuestOrder && o.status === 'served' && (
@@ -132,13 +138,18 @@ export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | n
 }
 
 export default function OrdersBoard() {
-  const { money, toast } = useApp();
+  const { user, money, toast } = useApp();
   const [tab, setTab] = useState<'today' | 'guest_pay' | 'preorders' | 'history'>('today');
   const [todayOrders, setTodayOrders] = useState<any[]>([]);
   const [preorders, setPreorders] = useState<any[]>([]);
   const [hist, setHist] = useState<any[]>([]);
   const [guestReqs, setGuestReqs] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [currentShift, setCurrentShift] = useState<any>(null);
+  const [recentShifts, setRecentShifts] = useState<any[]>([]);
+  const [shiftModal, setShiftModal] = useState<'start' | 'handover' | 'end' | 'history' | null>(null);
+  const [shiftNote, setShiftNote] = useState('');
+  const [shiftBusy, setShiftBusy] = useState(false);
   const [range, setRange] = useState([daysAgo(6), today()]);
   const [hstatus, setHstatus] = useState('');
   const [search, setSearch] = useState('');
@@ -162,18 +173,24 @@ export default function OrdersBoard() {
   const [cancelTarget, setCancelTarget] = useState<any>(null);
   const [cancelReason, setCancelReason] = useState('');
 
+  const loadShifts = () =>
+    api('/shifts/current', { cache: false })
+      .then((d) => { setCurrentShift(d.current || null); setRecentShifts(d.recent || []); })
+      .catch(() => {});
+
   const load = () => {
     const td = today();
     api(`/orders?from=${td}&to=${td}&limit=200`, { cache: false }).then(setTodayOrders).catch(() => {});
     api('/orders?status=draft&limit=100', { cache: false }).then(setPreorders).catch(() => {});
+    loadShifts();
   };
   const loadGuests = () => api('/users/guest-requests?status=pending', { cache: false }).then(setGuestReqs).catch(() => {});
-  const loadHist = () => api(`/orders?from=${range[0]}&to=${range[1]}${hstatus ? `&status=${hstatus}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`).then(setHist).catch(() => {});
+  const loadHist = () => api(`/orders?from=${range[0]}&to=${range[1]}${hstatus ? `&status=${hstatus}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`, { cache: false }).then(setHist).catch(() => {});
 
   useEffect(() => {
     load();
     loadGuests();
-    api('/products?all=1').then(setProducts).catch(() => {});
+    api('/products?all=1', { cache: false }).then(setProducts).catch(() => {});
     const t = setInterval(() => { load(); loadGuests(); }, 15000);
     const un = subscribe((ev, d) => {
       if (ev === 'order') {
@@ -183,6 +200,7 @@ export default function OrdersBoard() {
           try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=').play(); } catch { /* */ }
         }
       }
+      if (ev === 'shift') loadShifts();
       if (ev === 'guest_request') {
         loadGuests();
         if (d.approval_status === 'pending') toast('🪪 New Guest registration awaiting approval!');
@@ -191,6 +209,33 @@ export default function OrdersBoard() {
     return () => { clearInterval(t); un(); };
   }, []);
   useEffect(() => { if (tab === 'history') loadHist(); }, [tab, range, hstatus, search]);
+
+  const submitShiftAction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shiftModal || shiftModal === 'history' || shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      if (shiftModal === 'end') {
+        const res = await api('/shifts/end', { method: 'POST', body: { note: shiftNote.trim() || undefined } });
+        toast(`⏹ Shift #${res.id} ended (${res.billed_orders} billed · ${money(res.total_revenue)}). All orders & stock saved.`);
+      } else {
+        const res = await api('/shifts/start', {
+          method: 'POST',
+          body: { handover: shiftModal === 'handover', note: shiftNote.trim() || undefined },
+        });
+        toast(shiftModal === 'handover'
+          ? `🔄 Shift handed over — Shift #${res.id} (${res.bartender_name}) is now active!`
+          : `▶ Shift #${res.id} (${res.bartender_name}) started!`);
+      }
+      setShiftModal(null);
+      setShiftNote('');
+      loadShifts();
+    } catch (err: any) {
+      toast(err.message || 'Shift update failed', 'error');
+    } finally {
+      setShiftBusy(false);
+    }
+  };
 
   const openEditModal = (o: any) => {
     setEditOrder(o);
@@ -337,6 +382,55 @@ export default function OrdersBoard() {
 
   return (
     <div className="flex flex-col gap-3 p-2 sm:p-3 lg:h-full">
+      {/* Bartender Shift & Handover Bar */}
+      <Card className="!p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          {currentShift ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 font-extrabold text-emerald-700 dark:text-emerald-300">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Shift #{currentShift.id} · {currentShift.bartender_name}
+              </span>
+              <span className="text-[#707EAE] dark:text-[#94A3B8]">Started {fmtDate(currentShift.started_at)}</span>
+              <span className="font-bold text-[#1B2559] dark:text-[#E6EDF3]">
+                {currentShift.billed_orders} billed{currentShift.ongoing_orders > 0 ? ` · ${currentShift.ongoing_orders} ongoing` : ''} · {money(currentShift.total_revenue)}
+              </span>
+              <span className="hidden text-[#94A3B8] sm:inline">
+                (Member {money(currentShift.member_bill)} · Cash {money(currentShift.guest_cash)} · UPI {money(currentShift.guest_upi)})
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-[#707EAE] dark:text-[#94A3B8]">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-500/15 px-2.5 py-1 font-bold text-slate-600 dark:text-slate-300">
+                ⚪ No Active Shift
+              </span>
+              <span>Start a shift to track shift-wise sales &amp; clean handover (all prior orders &amp; stock remain intact).</span>
+            </div>
+          )}
+
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {!currentShift && (
+              <Button size="sm" variant="success" onClick={() => { setShiftNote(''); setShiftModal('start'); }}>
+                ▶ Start Shift
+              </Button>
+            )}
+            {currentShift && currentShift.bartender_id !== user?.id && (
+              <Button size="sm" variant="primary" onClick={() => { setShiftNote(''); setShiftModal('handover'); }}>
+                🔄 Handover to Me
+              </Button>
+            )}
+            {currentShift && (
+              <Button size="sm" variant="danger" onClick={() => { setShiftNote(''); setShiftModal('end'); }}>
+                ⏹ End Shift
+              </Button>
+            )}
+            <Button size="sm" variant="subtle" onClick={() => { loadShifts(); setShiftModal('history'); }}>
+              📋 Shifts ({recentShifts.length})
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       {/* Live Pending Guest Approvals Panel */}
       {guestReqs.length > 0 && (
         <Card className="!border-[#FBBF24] !bg-[#FBBF24]/10 !p-3.5">
@@ -433,7 +527,10 @@ export default function OrdersBoard() {
                         <Badge s={sd.badge}>{sd.label}</Badge>
                         {o.customer_role === 'guest' && <Badge s="placed">Guest</Badge>}
                         {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Cash' : '📱 UPI'}</Badge>}
-                        {o.source === 'favorite' && <Badge s="accepted">♥ Repeat</Badge>}
+                        {['favorite', 'repeat_drinks', 'repeat_order'].includes(o.source) && (
+                          <Badge s="accepted">{o.source === 'repeat_drinks' ? '🥃 Repeat Drinks' : '🔁 Repeat'}</Badge>
+                        )}
+                        {o.shift_id && <span className="rounded-md bg-[#F4F7FE] px-1.5 py-0.5 text-[10px] font-bold text-[#707EAE] dark:bg-[#252D3D] dark:text-[#94A3B8]">S#{o.shift_id}</span>}
                         <span className="ml-auto text-[11px] text-[#94A3B8]">{fmtDate(o.created_at)}</span>
                       </div>
 
@@ -655,6 +752,106 @@ export default function OrdersBoard() {
       </Modal>
 
       <OrderDetail id={sel} onClose={() => setSel(null)} onEdit={openEditModal} onChanged={() => { load(); if (tab === 'history') loadHist(); }} />
+
+      {/* Start / Handover / End Shift Modal */}
+      <Modal
+        open={shiftModal === 'start' || shiftModal === 'handover' || shiftModal === 'end'}
+        onClose={() => setShiftModal(null)}
+        title={
+          shiftModal === 'end'
+            ? `⏹ End Shift #${currentShift?.id || ''}`
+            : shiftModal === 'handover'
+              ? `🔄 Shift Handover to ${user?.name || 'Me'}`
+              : '▶ Start Bartender Shift'
+        }
+      >
+        <form onSubmit={submitShiftAction} className="space-y-4">
+          {shiftModal === 'end' && currentShift && (
+            <div className="space-y-1.5 rounded-2xl bg-[#F4F7FE] p-3.5 text-sm dark:bg-[#252D3D]">
+              <div className="font-bold text-[#1B2559] dark:text-[#E6EDF3]">Shift #{currentShift.id} — {currentShift.bartender_name}</div>
+              <div className="text-xs text-[#707EAE] dark:text-[#94A3B8]">Started: {fmtDate(currentShift.started_at)}</div>
+              <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
+                <div>Billed Orders: <b>{currentShift.billed_orders}</b></div>
+                <div>Ongoing Orders: <b>{currentShift.ongoing_orders}</b></div>
+                <div>Member Bill: <b>{money(currentShift.member_bill)}</b></div>
+                <div>Guest Cash: <b>{money(currentShift.guest_cash)}</b></div>
+                <div>Guest UPI: <b>{money(currentShift.guest_upi)}</b></div>
+                <div>Total Sales: <b className="text-[#422AFB] dark:text-[#818CF8]">{money(currentShift.total_revenue)}</b></div>
+              </div>
+              <p className="pt-2 text-[11px] text-[#707EAE] dark:text-[#94A3B8]">
+                Ending the shift preserves all ongoing &amp; historical orders, inventory balances, and reports for the next bartender.
+              </p>
+            </div>
+          )}
+          {shiftModal === 'handover' && currentShift && (
+            <p className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+              This will cleanly close <b>Shift #{currentShift.id} ({currentShift.bartender_name})</b> and immediately start a new shift under <b>{user?.rank ? `${user.rank} ` : ''}{user?.name}</b>. All ongoing orders, stock balances, and historical records remain intact.
+            </p>
+          )}
+          {shiftModal === 'start' && (
+            <p className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+              Start a new shift under <b>{user?.rank ? `${user.rank} ` : ''}{user?.name}</b>. All new orders will automatically link to this shift for handover &amp; shift-wise reporting.
+            </p>
+          )}
+          <Field label={shiftModal === 'end' ? 'Closing / Handover Note (optional)' : 'Opening / Handover Note (optional)'}>
+            <Input
+              value={shiftNote}
+              onChange={(e) => setShiftNote(e.target.value)}
+              placeholder={shiftModal === 'end' ? 'e.g. Cash reconciled, 2 guest orders pending' : 'e.g. Evening shift started, stock verified'}
+              autoFocus
+            />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setShiftModal(null)}>Cancel</Button>
+            <Button type="submit" variant={shiftModal === 'end' ? 'danger' : 'success'} disabled={shiftBusy}>
+              {shiftBusy ? 'Saving…' : shiftModal === 'end' ? 'Confirm End Shift' : shiftModal === 'handover' ? 'Confirm Handover' : 'Start Shift'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Shift History Modal */}
+      <Modal open={shiftModal === 'history'} onClose={() => setShiftModal(null)} title="📋 Bartender Shifts & Handover Log" wide>
+        {recentShifts.length === 0 ? (
+          <Empty>No shifts recorded yet</Empty>
+        ) : (
+          <div className="max-h-[65vh] overflow-auto">
+            <table className="w-full text-xs sm:text-sm">
+              <thead className="text-left text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                <tr>
+                  <th className="p-2">Shift</th>
+                  <th>Bartender</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Ended</th>
+                  <th className="text-right">Orders</th>
+                  <th className="text-right">Cash / UPI</th>
+                  <th className="text-right">Total Sales</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentShifts.map((s) => (
+                  <tr key={s.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
+                    <td className="p-2 font-bold">#{s.id}</td>
+                    <td>
+                      <div className="font-semibold">{s.bartender_name}</div>
+                      {(s.opening_note || s.closing_note) && (
+                        <div className="text-[11px] text-[#94A3B8]">{[s.opening_note, s.closing_note].filter(Boolean).join(' · ')}</div>
+                      )}
+                    </td>
+                    <td><Badge s={s.status === 'open' ? 'approved' : 'draft'}>{s.status === 'open' ? 'Active' : 'Closed'}</Badge></td>
+                    <td className="text-xs">{fmtDate(s.started_at)}</td>
+                    <td className="text-xs">{s.ended_at ? fmtDate(s.ended_at) : '—'}</td>
+                    <td className="text-right">{s.billed_orders}{s.ongoing_orders > 0 ? ` (+${s.ongoing_orders})` : ''}</td>
+                    <td className="text-right text-xs">{money(s.guest_cash)} / {money(s.guest_upi)}</td>
+                    <td className="text-right font-extrabold text-[#422AFB] dark:text-[#818CF8]">{money(s.total_revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

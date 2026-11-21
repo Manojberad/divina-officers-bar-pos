@@ -43,7 +43,9 @@ export interface Settings {
 
 interface Ctx {
   user: User | null; ready: boolean; settings: Settings;
-  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest', remember?: boolean) => Promise<User>; logout: () => void;
+  login: (pinOrSn: string, pin?: string, mode?: 'member' | 'admin' | 'guest', remember?: boolean) => Promise<User>;
+  establishSession: (token: string, user: User) => Promise<void>;
+  logout: () => void;
   reloadUser: () => Promise<void>;
   reloadSettings: () => Promise<void>; dark: boolean; toggleDark: () => void;
   toast: (text: string, type?: 'ok' | 'error') => void; money: (n: number) => string;
@@ -91,7 +93,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const t = getToken();
     const cached = localStorage.getItem('user');
     if (t && cached) setUser(JSON.parse(cached));
-    if (t) api<User>('/auth/me').then((u) => { setUser(u); localStorage.setItem('user', JSON.stringify(u)); }).catch(() => {}).finally(() => setReady(true));
+    if (t) api<User>('/auth/me', { cache: false }).then((u) => { setUser(u); localStorage.setItem('user', JSON.stringify(u)); }).catch(() => {}).finally(() => setReady(true));
     else setReady(true);
     const onLogout = () => { setUser(null); localStorage.removeItem('user'); };
     const onToast = (e: any) => toast(e.detail.text, e.detail.type);
@@ -124,12 +126,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore on unsupported browsers */ }
     return r.user;
   };
-  const logout = () => { setToken(null); localStorage.removeItem('user'); setUser(null); };
+  const establishSession = useCallback(async (token: string, u: User) => {
+    setToken(token);
+    localStorage.setItem('user', JSON.stringify(u));
+    setUser(u);
+    try {
+      const fresh = await api<User>('/auth/me', { cache: false });
+      setUser(fresh);
+      localStorage.setItem('user', JSON.stringify(fresh));
+    } catch { /* keep provided user */ }
+  }, []);
+
+  const logout = () => {
+    const t = getToken();
+    if (t) {
+      fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${t}` }, cache: 'no-store' }).catch(() => {});
+    }
+    setToken(null);
+    localStorage.removeItem('user');
+    setUser(null);
+  };
   const toggleDark = () => setDark((d) => { localStorage.setItem('theme', d ? 'light' : 'dark'); return !d; });
   const money = (n: number) => `${settings.currency}${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
   return (
-    <AppCtx.Provider value={{ user, ready, settings, login, logout, reloadUser, reloadSettings, dark, toggleDark, toast, money }}>
+    <AppCtx.Provider value={{ user, ready, settings, login, establishSession, logout, reloadUser, reloadSettings, dark, toggleDark, toast, money }}>
       {children}
       <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
         {toasts.map((t) => (

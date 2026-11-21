@@ -63,7 +63,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   const cacheKey = `${t ? t.slice(-12) : 'anon'}:${path}`;
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, { method, headers, body });
+    res = await fetch(`/api${path}`, { method, headers, body, cache: 'no-store' });
     setOnline(true);
   } catch (e) {
     setOnline(false);
@@ -144,6 +144,6 @@ export async function download(path: string, filename: string) {
 export function subscribe(handler: (event: string, data: any) => void) {
   const t = getToken();
   const es = new EventSource(`/api/events${t ? `?token=${encodeURIComponent(t)}` : ''}`);
-  ['order', 'notification', 'settings', 'guest_request'].forEach((ev) => es.addEventListener(ev, (e: any) => handler(ev, JSON.parse(e.data || '{}'))));
+  ['order', 'notification', 'settings', 'guest_request', 'shift'].forEach((ev) => es.addEventListener(ev, (e: any) => handler(ev, JSON.parse(e.data || '{}'))));
   return () => es.close();
 }

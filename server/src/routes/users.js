@@ -5,6 +5,7 @@ import { q, tx, audit, notify, now } from '../db.js';
 import {
   hashPin, verifyPin, requireRole, requireSuperAdmin, requireAuth, localToday,
   ALL_ROLES, ALL_CATEGORIES, ADMIN_ROLES, PRIVILEGED_OFFICER_ROLES, isSuperAdmin, roleLabel,
+  revokeUserSessions,
 } from '../auth.js';
 import { broadcast } from '../events.js';
 
@@ -55,7 +56,8 @@ r.post('/:id/approve-guest', requireRole('admin', 'bartender'), (req, res) => {
   const active = action === 'approved' ? 1 : 0;
   const t = now();
   const lim = req.body?.alcohol_limit !== undefined ? parseLimit(req.body.alcohol_limit) : u.alcohol_limit;
-  q.run('UPDATE users SET approval_status=?, active=?, approved_by=?, approved_at=?, alcohol_limit=? WHERE id=?', action, active, req.user.id, t, lim, id);
+  q.run('UPDATE users SET approval_status=?, active=?, approved_by=?, approved_at=?, alcohol_limit=?, guest_claim_token=CASE WHEN ?=0 THEN NULL ELSE guest_claim_token END WHERE id=?', action, active, req.user.id, t, lim, active, id);
+  if (!active) revokeUserSessions(id);
   const label = `${u.rank ? `${u.rank} ` : ''}${u.name} (${u.service_no})`;
   const msg = action === 'approved'
     ? `Guest ${label} approved by ${req.user.name} (${roleLabel(req.user.role)})${lim != null ? ` · limit ${lim} pegs` : ''}`
@@ -196,9 +198,11 @@ r.put('/:id', requireRole('admin'), (req, res) => {
   const nextLimit = req.body.alcohol_limit !== undefined ? parseLimit(req.body.alcohol_limit) : u.alcohol_limit;
   const tdStart = nextCategory === 'TD' ? (b.td_start_date ? String(b.td_start_date) : null) : null;
   const tdEnd = nextCategory === 'TD' ? (b.td_end_date ? String(b.td_end_date) : null) : null;
-  q.run('UPDATE users SET name=?, service_no=?, rank=?, branch=?, tors=?, mobile=?, email=?, category=?, role=?, pin_hash=?, alcohol_limit=?, td_start_date=?, td_end_date=?, active=? WHERE id=?',
+  const isActive = Number(b.active) ? 1 : 0;
+  q.run('UPDATE users SET name=?, service_no=?, rank=?, branch=?, tors=?, mobile=?, email=?, category=?, role=?, pin_hash=?, alcohol_limit=?, td_start_date=?, td_end_date=?, active=?, guest_claim_token=CASE WHEN ?=0 THEN NULL ELSE guest_claim_token END WHERE id=?',
     b.name.trim(), nextSn, b.rank || null, b.branch ? String(b.branch).trim() : null, b.tors ? String(b.tors).trim() : null,
-    b.mobile || null, b.email || null, nextCategory, b.role, nextPinHash, nextLimit, tdStart, tdEnd, Number(b.active) ? 1 : 0, id);
+    b.mobile || null, b.email || null, nextCategory, b.role, nextPinHash, nextLimit, tdStart, tdEnd, isActive, isActive, id);
+  if (!isActive) revokeUserSessions(id);
   audit(req.user.id, 'user.update', 'user', id, req.body);
   res.json(withDesignation(q.get(`SELECT ${COLS} FROM users WHERE id=?`, id)));
 });
@@ -250,7 +254,13 @@ r.delete('/:id', requireRole('admin'), (req, res) => {
     return res.status(403).json({ error: 'Only Super Admin can remove privileged officers or Super Admins' });
   }
   const used = q.get('SELECT COUNT(*) n FROM orders WHERE user_id=? OR created_by=?', id, id).n;
-  if (used) { q.run('UPDATE users SET active=0 WHERE id=?', id); audit(req.user.id, 'user.deactivate', 'user', id); return res.json({ ok: true, deactivated: true }); }
+  if (used) {
+    q.run('UPDATE users SET active=0, guest_claim_token=NULL WHERE id=?', id);
+    revokeUserSessions(id);
+    audit(req.user.id, 'user.deactivate', 'user', id);
+    return res.json({ ok: true, deactivated: true });
+  }
+  revokeUserSessions(id);
   q.run('DELETE FROM users WHERE id=?', id);
   audit(req.user.id, 'user.delete', 'user', id);
   res.json({ ok: true });

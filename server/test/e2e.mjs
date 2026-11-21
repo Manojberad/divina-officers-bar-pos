@@ -539,12 +539,240 @@ assert.equal(miscRep.totals.total_purchase_cost, 205, '30 + 75 + 100 = 205 (canc
 assert.equal(miscRep.totals.total_selling_value, 225.5, '33 + 82.50 + 110 = 225.50');
 assert.equal(miscRep.totals.profit, 20.5, '10% profit earned = ₹20.50');
 
-console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 15 Reports (JSON + XLSX + PDF)…');
+console.log('6d. Guest Auto-Login Approval, Edit Order (All Users + Audit), Shifts & Repeat Drinks/Order…');
+// 1) Guest Auto-Login on Bartender Approval + Session Revocation
+const gAutoReg = await req('/api/auth/guest-register', {
+  method: 'POST',
+  body: { service_no: 'G-AUTO-1', rank: 'Maj', name: 'Auto Login Guest', mobile: '9000011111' },
+});
+assert.equal(gAutoReg.status, 201);
+assert.equal(gAutoReg.data.status, 'pending');
+assert(gAutoReg.data.request_token, 'Pending guest receives secure claim token');
+
+const claimBefore = await req('/api/auth/guest-claim', {
+  method: 'POST',
+  body: { service_no: 'G-AUTO-1', request_token: gAutoReg.data.request_token },
+});
+assert.equal(claimBefore.status, 200);
+assert.equal(claimBefore.data.status, 'pending');
+assert.equal(claimBefore.data.token, undefined, 'Pending guest does not get auth token before approval');
+
+const gAutoApprove = await req(`/api/users/${gAutoReg.data.user.id}/approve-guest`, {
+  method: 'POST', token: btTok, body: { action: 'approve', alcohol_limit: 4 },
+});
+assert.equal(gAutoApprove.status, 200);
+
+const claimAfter = await req('/api/auth/guest-claim', {
+  method: 'POST',
+  body: { service_no: 'G-AUTO-1', request_token: gAutoReg.data.request_token },
+});
+assert.equal(claimAfter.status, 200);
+assert.equal(claimAfter.data.status, 'approved');
+assert(claimAfter.data.token, 'Approved guest automatically receives live session token');
+assert.equal(claimAfter.data.message, 'Your access has been approved. Welcome!');
+const autoGuestTok = claimAfter.data.token;
+assert.equal((await req('/api/auth/me', { token: autoGuestTok })).status, 200, 'Auto-logged-in guest session works immediately');
+assert.equal((await req('/api/dashboard', { token: autoGuestTok })).status, 403, 'Auto-logged-in guest retains role restrictions');
+
+// 2) Edit Order Option for Every User (Guest on unsettled order + Member on unapproved order + Lock rules + Audit Trail)
+const blStock0 = stockOf(blueCuracao.id);
+const limeStock0 = stockOf(freshLime.id);
+const cokeStock0 = stockOf(coke250.id);
+const spriteStock0 = stockOf(sprite250.id);
+
+const gAutoOrd = await req('/api/orders', {
+  method: 'POST', token: autoGuestTok,
+  body: { items: [{ product_id: blueLagoon.id, qty: 1 }, { product_id: coke250.id, qty: 1 }], notes: 'Initial guest order' },
+});
+assert.equal(gAutoOrd.status, 201);
+assert.equal(gAutoOrd.data.status, 'served');
+assert.equal(gAutoOrd.data.can_edit, true, 'Guest can edit their unsettled order');
+
+// Non-owner member cannot edit guest's order
+assert.equal((await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: memTok, body: { items: [{ product_id: coke250.id, qty: 1 }] },
+})).status, 403, 'Non-owner blocked from editing another user order');
+
+// Guest cannot add Party-Only 750ml or full alcohol bottle during edit
+assert.equal((await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: autoGuestTok, body: { items: [{ product_id: coke750.id, qty: 1 }] },
+})).status, 403, 'Guest blocked from adding party-only 750ml via Edit Order');
+assert.equal((await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: autoGuestTok, body: { items: [{ product_id: 1, serve_type: 'bottle', qty: 1 }] },
+})).status, 403, 'Guest blocked from adding full alcohol bottle via Edit Order');
+
+// Guest edits order: 1 -> 2 Blue Lagoon, keeps 1 Coke 250ml, adds 1 Sprite 250ml
+const gEdit1 = await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: autoGuestTok,
+  body: {
+    items: [
+      { product_id: blueLagoon.id, qty: 2 },
+      { product_id: coke250.id, qty: 1 },
+      { product_id: sprite250.id, qty: 1 },
+    ],
+    notes: 'Added extra Blue Lagoon & Sprite',
+    reason: 'Guest added drinks',
+  },
+});
+assert.equal(gEdit1.status, 200);
+assert.equal(gEdit1.data.total, 178.74, '2*69.37 + 20 + 20 = 178.74');
+assert.equal(stockOf(blueCuracao.id), blStock0 - 4, 'Exact delta: 2 Blue Lagoons deducted 4 loose (120ml) Blue Curacao');
+assert.equal(stockOf(freshLime.id), limeStock0 - 2, 'Exact delta: 2 Fresh Limes deducted');
+assert.equal(stockOf(coke250.id), cokeStock0 - 1, 'Coke 250ml NOT double-deducted');
+assert.equal(stockOf(sprite250.id), spriteStock0 - 1, 'Sprite 250ml deducted by 1');
+
+// Guest edits AGAIN: reduces Blue Lagoon 2 -> 1 and removes Sprite 250ml -> restores exact delta (no duplicate deductions!)
+const gEdit2 = await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: autoGuestTok,
+  body: {
+    items: [{ product_id: blueLagoon.id, qty: 1 }, { product_id: coke250.id, qty: 1 }],
+    notes: 'Reverted to 1 each',
+  },
+});
+assert.equal(gEdit2.status, 200);
+assert.equal(gEdit2.data.total, 89.37);
+assert.equal(stockOf(blueCuracao.id), blStock0 - 2, 'Restored 2 loose (60ml) Blue Curacao');
+assert.equal(stockOf(freshLime.id), limeStock0 - 1, 'Restored 1 Fresh Lime');
+assert.equal(stockOf(coke250.id), cokeStock0 - 1, 'Coke 250ml still exact -1');
+assert.equal(stockOf(sprite250.id), spriteStock0, 'Sprite 250ml completely restored');
+
+// Verify audit trail records modifier & timestamps
+const gDetail = (await req(`/api/orders/${gAutoOrd.data.id}`, { token: autoGuestTok })).data;
+assert(gDetail.events.some((ev) => /Edited by Auto Login Guest \(Guest\)/.test(ev.note)), 'Order audit trail records who modified & when');
+
+// Once settled via Cash, guest can NO LONGER edit the closed/settled order (409)
+await req(`/api/orders/${gAutoOrd.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed', payment_mode: 'cash' } });
+assert.equal((await req(`/api/orders/${gAutoOrd.data.id}`, { token: autoGuestTok })).data.can_edit, false, 'Settled guest order marked locked');
+assert.equal((await req(`/api/orders/${gAutoOrd.data.id}/items`, {
+  method: 'PUT', token: autoGuestTok, body: { items: [{ product_id: coke250.id, qty: 2 }] },
+})).status, 409, 'Guest blocked from editing settled order');
+
+// Member edits own unapproved auto-billed order -> succeeds; after approving -> locked (409)
+const foodProd = (await req('/api/products?all=1', { token: adminTok })).data.find((x) => x.category === 'Food' && x.active && x.stock > 2);
+assert(foodProd, 'Seeded Food item exists for repeat-drinks filtering test');
+const mOrd = await req('/api/orders', {
+  method: 'POST', token: memTok,
+  body: {
+    items: [
+      { product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 1 },
+      { product_id: blueLagoon.id, qty: 1 },
+      { product_id: coke250.id, qty: 1 },
+      { product_id: foodProd.id, qty: 1 },
+    ],
+  },
+});
+assert.equal(mOrd.status, 201);
+assert.equal(mOrd.data.can_edit, true, 'Member can edit unapproved pending order');
+const mEdit = await req(`/api/orders/${mOrd.data.id}/items`, {
+  method: 'PUT', token: memTok,
+  body: {
+    items: [
+      { product_id: 1, serve_type: 'peg', peg_ml: 30, qty: 2 },
+      { product_id: blueLagoon.id, qty: 1 },
+      { product_id: coke250.id, qty: 1 },
+      { product_id: foodProd.id, qty: 1 },
+    ],
+    reason: 'Added second peg',
+  },
+});
+assert.equal(mEdit.status, 200);
+await req(`/api/orders/${mOrd.data.id}/approve`, { method: 'POST', token: memTok });
+assert.equal((await req(`/api/orders/${mOrd.data.id}`, { token: memTok })).data.can_edit, false, 'Approved member order is locked');
+assert.equal((await req(`/api/orders/${mOrd.data.id}/items`, {
+  method: 'PUT', token: memTok, body: { items: [{ product_id: coke250.id, qty: 1 }] },
+})).status, 409, 'Member blocked from editing approved order');
+
+// 3) Repeat Order / Repeat Drinks (live pricing, category filter, out-of-stock handling, new order ID, idempotency)
+// Update Coke 250ml price 20 -> 25 to verify live price recalculation (never stale historical price)
+await req(`/api/products/${coke250.id}`, { method: 'PUT', token: adminTok, body: { selling_price: 25 } });
+const prevDrinks = (await req(`/api/orders/${mOrd.data.id}/repeat-preview?mode=drinks`, { token: memTok })).data;
+assert.equal(prevDrinks.items.length, 3, 'Repeat Drinks returns only the 3 drinks (Alcohol, Mocktail, Soft Drink)');
+assert.equal(prevDrinks.excluded_count, 1, 'Repeat Drinks excludes the 1 Food item');
+assert.equal(prevDrinks.excluded_items[0].name, foodProd.name);
+const prevCoke = prevDrinks.items.find((i) => i.product_id === coke250.id);
+assert.equal(prevCoke.current_unit_price, 25, 'Repeat preview uses live current price ₹25');
+assert.equal(prevCoke.prev_unit_price, 20, 'Repeat preview reports previous price ₹20');
+assert.equal(prevCoke.price_changed, true);
+
+const prevFull = (await req(`/api/orders/${mOrd.data.id}/repeat-preview?mode=full`, { token: memTok })).data;
+assert.equal(prevFull.items.length, 4, 'Repeat Entire Order includes all 4 items including Food');
+assert.equal(prevFull.excluded_count, 0);
+
+// Out-of-stock notification in Repeat preview
+const cokeStockBeforeOos = stockOf(coke250.id);
+q.run('UPDATE products SET stock=0 WHERE id=?', coke250.id);
+const prevOos = (await req(`/api/orders/${mOrd.data.id}/repeat-preview?mode=drinks`, { token: memTok })).data;
+assert.equal(prevOos.has_unavailable, true, 'Out-of-stock item flagged in repeat preview');
+assert.equal(prevOos.items.find((i) => i.product_id === coke250.id).available, false);
+q.run('UPDATE products SET stock=? WHERE id=?', cokeStockBeforeOos, coke250.id);
+
+// Submit Repeat Drinks -> creates BRAND NEW order with new ID, live price, does NOT touch historical order, idempotent on retry
+const repUuid = 'repeat-drinks-idempotent-uuid';
+const repOrd = await req('/api/orders', {
+  method: 'POST', token: memTok,
+  body: {
+    client_uuid: repUuid,
+    source: 'repeat_drinks',
+    items: prevDrinks.items.map((i) => ({ product_id: i.product_id, serve_type: i.serve_type, peg_ml: i.peg_ml, qty: i.qty })),
+    notes: `Repeat drinks from ${mOrd.data.order_no}`,
+  },
+});
+assert.equal(repOrd.status, 201);
+assert.notEqual(repOrd.data.id, mOrd.data.id, 'Repeat creates a brand new order ID');
+assert.equal(repOrd.data.items.find((i) => i.product_id === coke250.id).unit_price, 25, 'New repeat order uses live ₹25 price');
+const origCheck = (await req(`/api/orders/${mOrd.data.id}`, { token: memTok })).data;
+assert.equal(origCheck.items.find((i) => i.product_id === coke250.id).unit_price, 20, 'Original historical order price untouched');
+const repDup = await req('/api/orders', {
+  method: 'POST', token: memTok,
+  body: { client_uuid: repUuid, source: 'repeat_drinks', items: [{ product_id: coke250.id, qty: 1 }] },
+});
+assert.equal(repDup.status, 200);
+assert.equal(repDup.data.id, repOrd.data.id, 'Repeated click / retry with same client_uuid never creates duplicate order');
+await req(`/api/products/${coke250.id}`, { method: 'PUT', token: adminTok, body: { selling_price: 20 } });
+
+// Revoke Auto-Login Guest -> live session token & claim token immediately invalidated!
+await req(`/api/users/${gAutoReg.data.user.id}`, { method: 'PUT', token: adminTok, body: { active: 0 } });
+assert.equal((await req('/api/auth/me', { token: autoGuestTok })).status, 401, 'Revoked guest session immediately invalidated');
+assert.equal((await req('/api/auth/guest-claim', { method: 'POST', body: { service_no: 'G-AUTO-1', request_token: gAutoReg.data.request_token } })).status, 403, 'Revoked guest claim blocked');
+
+// 4) Bartender Shift Management & Handover (Shift A -> Handover to Bartender B -> End Shift -> Shift Report)
+const bt2Res = await req('/api/users', { method: 'POST', token: adminTok, body: { name: 'Urvesh Shift2', service_no: 'BT002', category: 'STAFF', role: 'bartender', pin: 'BT002' } });
+assert.equal(bt2Res.status, 201);
+const bt2Tok = await login('BT002', 'BT002');
+// Close any auto-started shift first so we test explicit Start -> Handover -> End cleanly
+const curSh = (await req('/api/shifts/current', { token: btTok })).data;
+if (curSh.current) await req('/api/shifts/end', { method: 'POST', token: btTok, body: { note: 'Pre-test close' } });
+
+const sh1 = await req('/api/shifts/start', { method: 'POST', token: btTok, body: { note: 'Evening Shift A' } });
+assert.equal(sh1.status, 201);
+const sh1Ord = await req('/api/orders', { method: 'POST', token: btTok, body: { user_id: 3, items: [{ product_id: coke250.id, qty: 1 }] } });
+assert.equal(sh1Ord.data.shift_id, sh1.data.id, 'Order automatically linked to active Shift A');
+
+// Bartender B without handover=true is warned (409)
+assert.equal((await req('/api/shifts/start', { method: 'POST', token: bt2Tok, body: { note: 'Overlap attempt' } })).status, 409, 'Overlapping shift requires explicit handover');
+
+// Bartender B performs clean Shift Handover
+const sh2 = await req('/api/shifts/start', { method: 'POST', token: bt2Tok, body: { handover: true, note: 'Night Shift B takeover' } });
+assert.equal(sh2.status, 201);
+assert.notEqual(sh2.data.id, sh1.data.id);
+const sh2Ord = await req('/api/orders', { method: 'POST', token: bt2Tok, body: { user_id: 3, items: [{ product_id: sprite250.id, qty: 2 }] } });
+assert.equal(sh2Ord.data.shift_id, sh2.data.id, 'New order linked to Shift B after handover');
+const sh2End = await req('/api/shifts/end', { method: 'POST', token: bt2Tok, body: { note: 'Night shift closed' } });
+assert.equal(sh2End.status, 200);
+assert.equal(sh2End.data.status, 'closed');
+assert.equal(sh2End.data.billed_orders, 1);
+assert.equal(sh2End.data.total_revenue, 40);
+
+const shiftsRep = (await req('/api/reports/shifts', { token: adminTok })).data;
+assert(shiftsRep.rows.some((r) => r.shift_id === sh1.data.id && r.revenue >= 20), 'Shift-wise report captures Shift A sales');
+assert(shiftsRep.rows.some((r) => r.shift_id === sh2.data.id && r.revenue === 40), 'Shift-wise report captures Shift B sales');
+
+console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 16 Reports (JSON + XLSX + PDF)…');
 const dash = (await req('/api/dashboard', { token: adminTok })).data;
 assert(dash.kpi.orders > 0 && dash.valuation.cost > 0);
 assert(dash.guestPayments.cash.revenue > 0 && dash.guestPayments.upi.revenue > 0, 'Dashboard tracks Guest Cash & UPI revenue');
 const types = (await req('/api/reports/types', { token: adminTok })).data;
-assert.equal(types.length, 15);
+assert.equal(types.length, 16);
 for (const t of types) {
   const j = await req(`/api/reports/${t.key}`, { token: adminTok });
   assert.equal(j.status, 200, `JSON report ${t.key}`);

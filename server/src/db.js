@@ -10,7 +10,25 @@ export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 for (const d of [DATA_DIR, UPLOAD_DIR, BACKUP_DIR]) fs.mkdirSync(d, { recursive: true });
 
 export const db = new DatabaseSync(process.env.DB_FILE || path.join(DATA_DIR, 'bar.db'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+
+/** Checkpoint WAL into the main DB file and verify integrity without disturbing data. */
+export function verifyDbHealth() {
+  try {
+    const chk = q.get('PRAGMA quick_check');
+    const ok = chk && Object.values(chk)[0] === 'ok';
+    if (!ok) console.error('[db] integrity warning:', chk);
+    return ok;
+  } catch (e) {
+    console.error('[db] integrity check error:', e.message);
+    return false;
+  }
+}
+
+export function flushAndCloseDb() {
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* ignore */ }
+  try { db.close(); } catch { /* ignore */ }
+}
 
 let depth = 0;
 /** Run fn inside a transaction (nested calls join the outer transaction). */
@@ -431,6 +449,40 @@ const migrations = [
   WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
     AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SUGARCANE JUICE');
   `,
+  // v14: Persistent user_sessions, Guest auto-login claim token, and Bartender shifts with order linkage
+  `
+  ALTER TABLE users ADD COLUMN guest_claim_token TEXT;
+
+  CREATE TABLE IF NOT EXISTS user_sessions(
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+
+  CREATE TABLE IF NOT EXISTS shifts(
+    id INTEGER PRIMARY KEY,
+    bartender_id INTEGER NOT NULL REFERENCES users(id),
+    bartender_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
+    opening_note TEXT,
+    closing_note TEXT,
+    started_by INTEGER REFERENCES users(id),
+    ended_by INTEGER REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_shifts_status ON shifts(status);
+  CREATE INDEX IF NOT EXISTS idx_shifts_started ON shifts(started_at);
+
+  ALTER TABLE orders ADD COLUMN shift_id INTEGER REFERENCES shifts(id);
+  CREATE INDEX IF NOT EXISTS idx_orders_shift ON orders(shift_id);
+  `,
 ];
 
 export function migrate() {
@@ -482,7 +534,7 @@ export function getSettings() {
 }
 
 export const ALL_TABLES = [
-  'users', 'categories', 'products', 'product_recipes', 'tables', 'orders', 'order_items', 'order_events',
+  'users', 'user_sessions', 'shifts', 'categories', 'products', 'product_recipes', 'tables', 'orders', 'order_items', 'order_events',
   'recipe_consumptions', 'misc_transactions', 'stock_movements', 'reconciliations', 'favorite_orders', 'settings', 'audit_logs', 'notifications',
 ];
 
