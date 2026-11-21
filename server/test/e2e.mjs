@@ -153,7 +153,7 @@ assert.equal(favRepeat.data.status, 'closed', 'Repeat Favorite Order auto-accept
 // Category Profit Margin % recalculates selling & peg prices
 const catsList = (await req('/api/categories', { token: adminTok })).data;
 assert(catsList.some((c) => c.name === 'Cigarettes' && Number(c.profit_margin) === 7.5), 'Cigarettes category present with 7.5% margin');
-assert(catsList.some((c) => c.name === 'Misc'), 'Misc category present');
+assert(catsList.some((c) => c.name === 'Miscellaneous' && Number(c.profit_margin) === 10), 'Miscellaneous category present with 10% default margin');
 const alcCat = catsList.find((c) => c.name === 'Alcohol');
 const marginUpd = await req(`/api/categories/${alcCat.id}`, { method: 'PUT', token: adminTok, body: { profit_margin: 5, apply_margin: true } });
 assert.equal(marginUpd.status, 200);
@@ -288,7 +288,7 @@ assert(alerts.length > 0 && alerts.some((a) => a.stock_status === 'out'), 'Color
 console.log('6b. Recipe-based Mocktails (Blue Lagoon & Mint Mojito): dynamic cost, atomic deduction, rollback, idempotency, edit, cancel & reporting…');
 const mockCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Mocktails').id;
 const softCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Soft Drinks').id;
-const miscCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Misc').id;
+const miscCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Miscellaneous').id;
 
 const mkProd = async (body) => (await req('/api/products', { method: 'POST', token: adminTok, body })).data;
 const blueCuracao = await mkProd({ name: 'BLUE CURACAO', category_id: softCatId, sub_category: 'Soda', unit: 'loose', is_peg: false, purchase_price: 11.2, selling_price: 12.32, opening_stock: 42 });
@@ -427,12 +427,124 @@ assert.equal(bl5Rows.find((r) => r.ingredient_name === 'SOFT 250 ML').qty_consum
 assert.equal(bl5Rows.find((r) => r.ingredient_name === 'SODA 300 ML').qty_consumed, 1250, '5 Blue Lagoons -> 1250 ml Soda');
 assert.equal(bl5Rows.find((r) => r.ingredient_name === 'FRESH LIME').qty_consumed, 5, '5 Blue Lagoons -> 5 piece Lime');
 
-console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 12 Reports (JSON + XLSX + PDF)…');
+console.log('6c. Coke & Sprite (250ml regular / 750ml Party Only), Tonic Water Can (₹88), Lime (₹13) & Local-Purchase Miscellaneous (dynamic cost+10% pricing & profit)…');
+const coke250 = await mkProd({ name: 'Coca-Cola 250 ml', category_id: softCatId, sub_category: 'Soda', brand: 'Coca-Cola', size_ml: 250, unit: 'bottle', is_peg: false, party_only: false, purchase_price: 18, selling_price: 20, opening_stock: 30 });
+const coke750 = await mkProd({ name: 'Coca-Cola 750 ml', category_id: softCatId, sub_category: 'Soda', brand: 'Coca-Cola', size_ml: 750, unit: 'bottle', is_peg: false, party_only: true, purchase_price: 36, selling_price: 40, opening_stock: 24 });
+const sprite250 = await mkProd({ name: 'Sprite 250 ml', category_id: softCatId, sub_category: 'Soda', brand: 'Sprite', size_ml: 250, unit: 'bottle', is_peg: false, party_only: false, purchase_price: 18, selling_price: 20, opening_stock: 30 });
+const sprite750 = await mkProd({ name: 'Sprite 750 ml', category_id: softCatId, sub_category: 'Soda', brand: 'Sprite', size_ml: 750, unit: 'bottle', is_peg: false, party_only: true, purchase_price: 36, selling_price: 40, opening_stock: 24 });
+const tonicCan = (await req('/api/products?all=1', { token: adminTok })).data.find((x) => /tonic water/i.test(x.name));
+await req(`/api/products/${tonicCan.id}`, { method: 'PUT', token: adminTok, body: { unit: 'can', purchase_price: 60, selling_price: 88 } });
+await req('/api/inventory/movement', { method: 'POST', token: adminTok, body: { product_id: tonicCan.id, type: 'purchase', qty: 10, unit_cost: 60, note: 'Restock cans' } });
+
+const coconutWater = await mkProd({ name: 'Coconut Water', category_id: miscCatId, unit: 'unit', is_peg: false, is_local_purchase: true });
+const freshFruitJuice = await mkProd({ name: 'Fresh Fruit Juices', category_id: miscCatId, unit: 'glass', is_peg: false, is_local_purchase: true });
+const sugarcaneJuice = await mkProd({ name: 'Sugarcane Juice', category_id: miscCatId, unit: 'glass', is_peg: false, is_local_purchase: true });
+
+// Public / regular customer product list hides 750ml Party Only variants & bartender local-purchase items
+const regList = (await req('/api/products', { token: memTok })).data;
+assert(regList.some((x) => x.id === coke250.id && x.selling_price === 20), 'Regular customer sees Coke 250ml @ ₹20');
+assert(regList.some((x) => x.id === sprite250.id && x.selling_price === 20), 'Regular customer sees Sprite 250ml @ ₹20');
+assert(!regList.some((x) => x.id === coke750.id || x.id === sprite750.id), '750ml Party-Only variants hidden from regular customers');
+assert(!regList.some((x) => x.id === coconutWater.id), 'Bartender local-purchase items hidden from regular customer catalog');
+
+// Backend enforces Party-Only restriction & whole-unit packaging
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: coke750.id, qty: 1 }] } })).status, 403, 'Member blocked from ordering Coke 750ml');
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { is_party: true, items: [{ product_id: coke750.id, qty: 1 }] } })).status, 403, 'Member cannot forge Party Order flag');
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { is_party: false, items: [{ product_id: sprite750.id, qty: 1 }] } })).status, 403, 'Regular bartender order blocked from Sprite 750ml');
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: coke250.id, qty: 0.5 }] } })).status, 400, 'Partial bottle splitting rejected');
+
+// Regular order: 3 Coke 250ml (₹60), 2 Sprite 250ml (₹40), 2 Tonic Water cans (₹176)
+const tonicBefore = stockOf(tonicCan.id);
+const bevOrd = await req('/api/orders', {
+  method: 'POST', token: memTok,
+  body: { items: [{ product_id: coke250.id, qty: 3 }, { product_id: sprite250.id, qty: 2 }, { product_id: tonicCan.id, qty: 2 }] },
+});
+assert.equal(bevOrd.status, 201);
+assert.equal(bevOrd.data.total, 276, '3*20 + 2*20 + 2*88 = 276');
+assert.equal(stockOf(coke250.id), 27, '3 complete Coke 250ml bottles deducted');
+assert.equal(stockOf(sprite250.id), 28, '2 complete Sprite 250ml bottles deducted');
+assert.equal(stockOf(tonicCan.id), tonicBefore - 2, '2 complete Tonic Water cans deducted');
+
+// Admin configures Coke 750ml price (₹40 -> ₹45) & places Party Order with both 250ml and 750ml
+await req(`/api/products/${coke750.id}`, { method: 'PUT', token: adminTok, body: { selling_price: 45 } });
+const partyOrd = await req('/api/orders', {
+  method: 'POST', token: btTok,
+  body: { user_id: 3, is_party: true, items: [{ product_id: coke250.id, qty: 2 }, { product_id: coke750.id, qty: 3 }, { product_id: sprite750.id, qty: 2 }] },
+});
+assert.equal(partyOrd.status, 201);
+assert.equal(partyOrd.data.is_party, 1);
+assert.equal(partyOrd.data.total, 255, '2*20 + 3*45 + 2*40 = 255');
+assert.equal(stockOf(coke250.id), 25);
+assert.equal(stockOf(coke750.id), 21);
+assert.equal(stockOf(sprite750.id), 22);
+
+// Insufficient stock on 750ml Party Order rejected cleanly without deducting anything
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { is_party: true, items: [{ product_id: coke750.id, qty: 99 }] } })).status, 409);
+assert.equal(stockOf(coke750.id), 21);
+
+// Cancel Party Order & verify exact stock restoration (plus keep a fresh smaller Party Order for reports)
+await req(`/api/orders/${partyOrd.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled', note: 'Party postponed' } });
+assert.equal(stockOf(coke250.id), 27, 'Cancelled party order restored Coke 250ml');
+assert.equal(stockOf(coke750.id), 24, 'Cancelled party order restored Coke 750ml');
+assert.equal(stockOf(sprite750.id), 24, 'Cancelled party order restored Sprite 750ml');
+const partyOrd2 = await req('/api/orders', {
+  method: 'POST', token: btTok,
+  body: { user_id: 3, is_party: true, items: [{ product_id: coke750.id, qty: 2 }, { product_id: sprite750.id, qty: 1 }] },
+});
+assert.equal(partyOrd2.status, 201);
+
+// Locally Purchased Miscellaneous items: dynamic pricing formula (+10%), no inventory deduction, cost hidden from customers!
+assert.equal((await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: coconutWater.id, qty: 1, purchase_cost: 50 }] } })).status, 403, 'Customer cannot directly submit local-purchase misc item');
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: coconutWater.id, qty: 1 }] } })).status, 400, 'Purchase cost required for local-purchase misc item');
+
+const miscOrd = await req('/api/orders', {
+  method: 'POST', token: btTok,
+  body: {
+    user_id: 3,
+    items: [
+      { product_id: coconutWater.id, qty: 1, purchase_cost: 30 },     // 30 -> 33
+      { product_id: freshFruitJuice.id, qty: 1, purchase_cost: 75 },  // 75 -> 82.50
+      { product_id: sugarcaneJuice.id, qty: 2, purchase_cost: 50 },   // 50 -> 55 x 2 = 110
+    ],
+  },
+});
+assert.equal(miscOrd.status, 201);
+assert.equal(miscOrd.data.total, 225.5, '33 + 82.50 + 110 = 225.50');
+assert.equal(q.get('SELECT COUNT(*) n FROM stock_movements WHERE product_id IN (?,?,?)', coconutWater.id, freshFruitJuice.id, sugarcaneJuice.id).n, 0, 'Local-purchase items never touch stocked inventory');
+
+// Customer-facing bill hides purchase_cost while staff sees it
+const custView = (await req(`/api/orders/${miscOrd.data.id}`, { token: memTok })).data;
+assert(custView.items.every((i) => i.purchase_cost === undefined), 'Customer bill never exposes purchase cost or margin');
+const staffView = (await req(`/api/orders/${miscOrd.data.id}`, { token: btTok })).data;
+assert.equal(staffView.items.find((i) => i.product_id === freshFruitJuice.id).purchase_cost, 75, 'Staff view retains purchase cost');
+
+// Admin changes Miscellaneous default profit margin (10% -> 20%), orders ₹50 -> ₹60, then cancels & restores 10%
+await req(`/api/categories/${miscCatId}`, { method: 'PUT', token: adminTok, body: { profit_margin: 20 } });
+const miscOrd20 = await req('/api/orders', { method: 'POST', token: btTok, body: { user_id: 3, items: [{ product_id: coconutWater.id, qty: 1, purchase_cost: 50 }] } });
+assert.equal(miscOrd20.status, 201);
+assert.equal(miscOrd20.data.total, 60, 'Updated 20% margin: ₹50 -> ₹60');
+await req(`/api/orders/${miscOrd20.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled' } });
+assert.equal(q.get('SELECT reversed FROM misc_transactions WHERE order_id=?', miscOrd20.data.id).reversed, 1, 'Cancelled misc order marked reversed');
+await req(`/api/categories/${miscCatId}`, { method: 'PUT', token: adminTok, body: { profit_margin: 10 } });
+
+// Verify Packaged Beverages & Miscellaneous Profit reports
+const bevRep = (await req('/api/reports/packaged_beverages', { token: adminTok })).data;
+assert.equal(bevRep.rows.find((r) => r.name === 'Coca-Cola 250 ml').regular_qty, 3);
+assert.equal(bevRep.rows.find((r) => r.name === 'Coca-Cola 750 ml').party_qty, 2);
+assert.equal(bevRep.rows.find((r) => r.name === 'Sprite 250 ml').regular_qty, 2);
+assert.equal(bevRep.rows.find((r) => r.name === 'Sprite 750 ml').party_qty, 1);
+assert(bevRep.rows.find((r) => /tonic water/i.test(r.name)).total_qty >= 2, 'Tonic Water cans included in Packaged Beverages report');
+const miscRep = (await req('/api/reports/misc_local', { token: adminTok })).data;
+assert.equal(miscRep.totals.total_purchase_cost, 205, '30 + 75 + 100 = 205 (cancelled excluded)');
+assert.equal(miscRep.totals.total_selling_value, 225.5, '33 + 82.50 + 110 = 225.50');
+assert.equal(miscRep.totals.profit, 20.5, '10% profit earned = ₹20.50');
+
+console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 15 Reports (JSON + XLSX + PDF)…');
 const dash = (await req('/api/dashboard', { token: adminTok })).data;
 assert(dash.kpi.orders > 0 && dash.valuation.cost > 0);
 assert(dash.guestPayments.cash.revenue > 0 && dash.guestPayments.upi.revenue > 0, 'Dashboard tracks Guest Cash & UPI revenue');
 const types = (await req('/api/reports/types', { token: adminTok })).data;
-assert.equal(types.length, 12);
+assert.equal(types.length, 15);
 for (const t of types) {
   const j = await req(`/api/reports/${t.key}`, { token: adminTok });
   assert.equal(j.status, 200, `JSON report ${t.key}`);

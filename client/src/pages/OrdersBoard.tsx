@@ -61,6 +61,7 @@ export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | n
         <div className="space-y-3 text-sm">
           <div className="flex flex-wrap gap-2">
             {sd && <Badge s={sd.badge}>{sd.label}</Badge>}
+            {!!o.is_party && <Badge s="preparing">🎉 Party Order</Badge>}
             {isGuestOrder && <Badge s="placed">Guest</Badge>}
             {o.payment_mode && <Badge s="approved">{o.payment_mode === 'cash' ? '💵 Paid Cash' : '📱 Paid UPI'}</Badge>}
             {o.approval_status !== 'na' && <Badge s={o.approval_status}>approval: {o.approval_status}</Badge>}
@@ -74,7 +75,19 @@ export function OrderDetail({ id, onClose, onChanged, onEdit }: { id: number | n
           </div>
           <table className="w-full">
             <tbody>
-              {o.items.map((i: any) => <tr key={i.id} className="border-b border-[#E9EDF7] dark:border-[#2A3346]"><td className="py-1.5">{itemLabel(i)}</td><td className="text-right font-semibold">{money(i.line_total)}</td></tr>)}
+              {o.items.map((i: any) => (
+                <tr key={i.id} className="border-b border-[#E9EDF7] dark:border-[#2A3346]">
+                  <td className="py-1.5">
+                    <span>{itemLabel(i)}</span>
+                    {isStaffRole(user?.role) && i.purchase_cost != null && (
+                      <span className="ml-2 rounded bg-[#422AFB]/10 px-1.5 py-0.5 text-[10px] font-bold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
+                        Cost {money(i.purchase_cost)}/u
+                      </span>
+                    )}
+                  </td>
+                  <td className="text-right font-semibold">{money(i.line_total)}</td>
+                </tr>
+              ))}
               <tr className="font-extrabold"><td className="py-1.5">Total</td><td className="text-right text-[#422AFB] dark:text-[#818CF8]">{money(o.total)}</td></tr>
             </tbody>
           </table>
@@ -188,6 +201,7 @@ export default function OrdersBoard() {
       peg_ml: i.peg_ml,
       qty: i.qty,
       unit_price: i.unit_price,
+      ...(i.purchase_cost != null ? { purchase_cost: i.purchase_cost } : {}),
     })));
     setEditNotes(o.notes || '');
     setEditReason('');
@@ -221,7 +235,10 @@ export default function OrdersBoard() {
       await api(`/orders/${editOrder.id}/items`, {
         method: 'PUT',
         body: {
-          items: editItems.map((l) => ({ product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty })),
+          items: editItems.map((l) => ({
+            product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty,
+            ...(l.purchase_cost != null ? { purchase_cost: l.purchase_cost } : {}),
+          })),
           notes: editNotes,
           reason: editReason.trim() || 'Item availability adjustment',
         },

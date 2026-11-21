@@ -65,7 +65,7 @@ export default function Inventory() {
     [filteredProducts],
   );
 
-  const physicalProducts = useMemo(() => products.filter((p) => !p.is_recipe), [products]);
+  const physicalProducts = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase), [products]);
   const selProd = products.find((p) => p.id === Number(movModal?.product_id));
 
   return (
@@ -152,8 +152,18 @@ export default function Inventory() {
                 {filteredProducts.map((p) => (
                   <tr key={p.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
                     <td className="p-2 font-semibold">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span>{p.name}</span>
+                        {p.party_only && (
+                          <span className="rounded-full bg-[#D97706]/15 px-2 py-0.5 text-[10px] font-extrabold text-[#B45309] dark:bg-[#FBBF24]/20 dark:text-[#FCD34D]">
+                            🎉 Party Only
+                          </span>
+                        )}
+                        {p.is_local_purchase && (
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300">
+                            🛒 Local Purchase
+                          </span>
+                        )}
                         {p.is_recipe && (
                           <span className="rounded-full bg-[#422AFB]/12 px-2 py-0.5 text-[10px] font-extrabold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
                             🍹 Recipe
@@ -167,22 +177,28 @@ export default function Inventory() {
                     </td>
                     <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
                     <td>
-                      <b>{p.stock_display}</b> {p.stock_unit}
-                      {p.is_recipe && (
-                        <div className="text-xs text-[#94A3B8]">
-                          makeable from ingredients{p.limiting_ingredient ? ` (min: ${p.limiting_ingredient})` : ''}
-                        </div>
-                      )}
-                      {p.is_peg && (
-                        <div className="text-xs text-[#94A3B8]">
-                          {p.full_bottles ?? 0} btl · {p.loose_pegs_30ml ?? 0} loose pegs ({Math.round(p.stock)} ml)
-                        </div>
+                      {p.is_local_purchase ? (
+                        <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">On-demand (no stock)</span>
+                      ) : (
+                        <>
+                          <b>{p.stock_display}</b> {p.stock_unit}
+                          {p.is_recipe && (
+                            <div className="text-xs text-[#94A3B8]">
+                              makeable from ingredients{p.limiting_ingredient ? ` (min: ${p.limiting_ingredient})` : ''}
+                            </div>
+                          )}
+                          {p.is_peg && (
+                            <div className="text-xs text-[#94A3B8]">
+                              {p.full_bottles ?? 0} btl · {p.loose_pegs_30ml ?? 0} loose pegs ({Math.round(p.stock)} ml)
+                            </div>
+                          )}
+                        </>
                       )}
                     </td>
-                    <td><StockDot s={p.stock_status} /></td>
-                    {admin && <td>{p.is_recipe ? `${money(p.recipe_cost ?? 0)} (recipe)` : money(p.purchase_price)}</td>}
-                    <td>{money(p.selling_price)}{p.is_peg ? ` · 30ml ${money(p.peg_price)}` : ''}</td>
-                    {admin && <td className="text-right font-semibold">{p.is_recipe ? <span className="text-xs text-[#94A3B8]">on ingredients</span> : money(p.stock_value)}</td>}
+                    <td>{p.is_local_purchase ? <span className="text-xs font-bold text-[#94A3B8]">—</span> : <StockDot s={p.stock_status} />}</td>
+                    {admin && <td>{p.is_local_purchase ? 'Entered at sale' : p.is_recipe ? `${money(p.recipe_cost ?? 0)} (recipe)` : money(p.purchase_price)}</td>}
+                    <td>{p.is_local_purchase ? `Cost + ${p.local_margin_pct ?? 10}%` : `${money(p.selling_price)}${p.is_peg ? ` · 30ml ${money(p.peg_price)}` : ''}`}</td>
+                    {admin && <td className="text-right font-semibold">{p.is_local_purchase ? <span className="text-xs text-[#94A3B8]">on-demand</span> : p.is_recipe ? <span className="text-xs text-[#94A3B8]">on ingredients</span> : money(p.stock_value)}</td>}
                   </tr>
                 ))}
                 {filteredProducts.length === 0 && (
@@ -221,7 +237,7 @@ export default function Inventory() {
             <table className="w-full text-sm">
               <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>System stock</th><th>Physical count (bottles / units)</th><th>Difference</th></tr></thead>
               <tbody>
-                {filteredProducts.filter((p) => !p.is_recipe).map((p) => {
+                {filteredProducts.filter((p) => !p.is_recipe && !p.is_local_purchase).map((p) => {
                   const v = counts[p.id] ?? '';
                   const diff = v === '' ? null : Math.round((Number(v) - p.stock_display) * 1000) / 1000;
                   return (

@@ -5,6 +5,15 @@ import { createOrder, editOrderItems, transition, approve, loadOrder, getProduct
 
 const r = Router();
 
+// Customer-facing bills must never expose purchase_cost or profit margins
+function sanitizeOrder(o, user) {
+  if (!o || (user && STAFF.includes(user.role))) return o;
+  return {
+    ...o,
+    items: (o.items || []).map(({ purchase_cost, ...rest }) => rest),
+  };
+}
+
 /* ---------- Member & Guest Favorite Orders (Repeat Orders) ---------- */
 function hydrateFavorite(row) {
   let rawItems = [];
@@ -134,8 +143,12 @@ r.get('/', requireAuth, (req, res) => {
     FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id LEFT JOIN users cb ON cb.id=o.created_by
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY o.id DESC LIMIT ?`, ...p, Number(limit));
   const items = rows.length ? q.all(`SELECT * FROM order_items WHERE order_id IN (${rows.map(() => '?').join(',')})`, ...rows.map((o) => o.id)) : [];
+  const isStaffUser = STAFF.includes(req.user.role);
   const byOrder = {};
-  items.forEach((i) => (byOrder[i.order_id] ||= []).push(i));
+  items.forEach((i) => {
+    const clean = isStaffUser ? i : (({ purchase_cost, ...rest }) => rest)(i);
+    (byOrder[i.order_id] ||= []).push(clean);
+  });
   res.json(rows.map((o) => ({ ...o, items: byOrder[o.id] || [] })));
 });
 
@@ -143,14 +156,14 @@ r.get('/:id', requireAuth, (req, res) => {
   const o = loadOrder(Number(req.params.id));
   if (!o || (!STAFF.includes(req.user.role) && o.user_id !== req.user.id)) return res.status(404).json({ error: 'Not found' });
   o.events = q.all('SELECT e.*, u.name user_name FROM order_events e LEFT JOIN users u ON u.id=e.user_id WHERE order_id=? ORDER BY e.id', o.id);
-  res.json(o);
+  res.json(sanitizeOrder(o, req.user));
 });
 
 // Orders may be created by staff (Products/POS), logged-in members/customers or via QR menu.
 r.post('/', optionalAuth, (req, res) => {
   if (!req.user) throw new HttpError(401, 'Please log in to place an order');
   const { order, duplicate } = createOrder(req.body || {}, req.user);
-  res.status(duplicate ? 200 : 201).json({ ...order, duplicate });
+  res.status(duplicate ? 200 : 201).json({ ...sanitizeOrder(order, req.user), duplicate });
 });
 
 r.put('/:id/items', requireRole('admin', 'bartender'), (req, res) => {

@@ -41,13 +41,13 @@ r.get('/', requireRole('admin'), (req, res) => {
   const visitors = [...customers].sort((a, b) => b.visits - a.visits).slice(0, 10);
 
   const products = q.all(`${PRODUCT_SELECT} WHERE p.active=1`).map(decorate);
-  const physicalProducts = products.filter((p) => !p.is_recipe);
+  const physicalProducts = products.filter((p) => !p.is_recipe && !p.is_local_purchase);
   const valuation = {
     cost: round(physicalProducts.reduce((s, p) => s + p.stock_value, 0)),
     retail: round(physicalProducts.reduce((s, p) => s + p.stock_display * p.selling_price, 0)),
     items: products.length,
   };
-  const alerts = products.filter((p) => p.stock_status !== 'healthy').sort((a, b) => a.stock_display - b.stock_display);
+  const alerts = products.filter((p) => !p.is_local_purchase && p.stock_status !== 'healthy').sort((a, b) => a.stock_display - b.stock_display);
 
   const mv = q.all(`SELECT date(at,'localtime') d, type, SUM(ABS(qty)*COALESCE(unit_cost,0)) value FROM stock_movements WHERE at>=? AND at<? GROUP BY d, type ORDER BY d`, F, T);
   // Consumption value at cost (sales have no cost stored; compute from product purchase price)

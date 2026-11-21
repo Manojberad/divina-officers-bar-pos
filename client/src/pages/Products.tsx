@@ -5,7 +5,7 @@ import { Button, Card, Field, Input, Modal, Select, StockDot } from '../componen
 
 const BLANK = {
   name: '', category_id: '', sub_category: '', brand: '', description: '', size_ml: 750, unit: 'bottle',
-  is_peg: true, is_recipe: false, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, active: true,
+  is_peg: true, is_recipe: false, party_only: false, is_local_purchase: false, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, active: true,
 };
 
 const SUB_OPTIONS: Record<string, string[]> = {
@@ -27,7 +27,7 @@ export default function Products() {
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('ALL');
 
-  const rawIngredients = useMemo(() => products.filter((p) => !p.is_recipe && p.active), [products]);
+  const rawIngredients = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase && p.active), [products]);
 
   const openRecipeEditor = (p: any) => {
     const existing = Array.isArray(p.recipe) ? p.recipe : [];
@@ -84,7 +84,11 @@ export default function Products() {
     const val = Math.max(0, Number(margins[c.id]) || 0);
     try {
       const r = await api<any>(`/categories/${c.id}`, { method: 'PUT', body: { profit_margin: val, apply_margin: true } });
-      toast(`✔ ${c.name} margin set to ${val}% (${r.updated_products ?? 0} product prices recalculated)`);
+      toast(
+        /^misc/i.test(c.name)
+          ? `✔ ${c.name} dynamic local-purchase margin updated to ${val}%`
+          : `✔ ${c.name} margin set to ${val}% (${r.updated_products ?? 0} product prices recalculated)`,
+      );
       load();
     } catch (e: any) { toast(e.message, 'error'); }
   };
@@ -233,6 +237,16 @@ export default function Products() {
                   <td className="flex items-center gap-2 p-2 font-semibold">
                     {p.image && <img src={p.image} className="h-9 w-9 shrink-0 rounded-lg object-cover" alt="" />}
                     <span className="max-w-xs truncate" title={p.name}>{p.name}</span>
+                    {p.party_only && (
+                      <span className="shrink-0 rounded-full bg-[#D97706]/15 px-2 py-0.5 text-[10px] font-extrabold text-[#B45309] dark:bg-[#FBBF24]/20 dark:text-[#FCD34D]">
+                        🎉 Party Only
+                      </span>
+                    )}
+                    {p.is_local_purchase && (
+                      <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300">
+                        🛒 Local Purchase
+                      </span>
+                    )}
                     {p.is_recipe && (
                       <span className="shrink-0 rounded-full bg-[#422AFB]/12 px-2 py-0.5 text-[10px] font-extrabold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
                         🍹 Recipe
@@ -247,28 +261,38 @@ export default function Products() {
                   </td>
                   <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
                   <td>
-                    {p.is_recipe ? (
+                    {p.is_local_purchase ? (
+                      <span className="text-xs text-[#94A3B8]">Entered at sale</span>
+                    ) : p.is_recipe ? (
                       <div>
                         <div className="font-semibold">{money(p.recipe_cost ?? 0)}</div>
                         <div className="text-[10px] text-[#94A3B8]">dynamic recipe cost</div>
                       </div>
                     ) : money(p.purchase_price)}
                   </td>
-                  <td className="font-bold text-[#422AFB] dark:text-[#818CF8]">{money(p.selling_price)}</td>
+                  <td className="font-bold text-[#422AFB] dark:text-[#818CF8]">
+                    {p.is_local_purchase ? `Cost + ${p.local_margin_pct ?? 10}%` : money(p.selling_price)}
+                  </td>
                   <td>{p.is_peg ? money(p.peg_price) : '—'}</td>
                   <td>
-                    <StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} />
-                    {p.is_recipe && (
-                      <div className="text-[11px] text-[#94A3B8]">
-                        from ingredients{p.limiting_ingredient ? ` (min: ${p.limiting_ingredient})` : ''}
-                      </div>
-                    )}
-                    {p.is_peg && p.full_bottles != null && (p.full_bottles > 0 || p.loose_pegs_30ml > 0) && (
-                      <div className="text-[11px] text-[#94A3B8]">{p.full_bottles} btl · {p.loose_pegs_30ml} pegs</div>
+                    {p.is_local_purchase ? (
+                      <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">On-demand (no stock)</span>
+                    ) : (
+                      <>
+                        <StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} />
+                        {p.is_recipe && (
+                          <div className="text-[11px] text-[#94A3B8]">
+                            from ingredients{p.limiting_ingredient ? ` (min: ${p.limiting_ingredient})` : ''}
+                          </div>
+                        )}
+                        {p.is_peg && p.full_bottles != null && (p.full_bottles > 0 || p.loose_pegs_30ml > 0) && (
+                          <div className="text-[11px] text-[#94A3B8]">{p.full_bottles} btl · {p.loose_pegs_30ml} pegs</div>
+                        )}
+                      </>
                     )}
                   </td>
                   <td className="space-x-1 whitespace-nowrap text-right">
-                    {!p.is_peg && (
+                    {!p.is_peg && !p.is_local_purchase && (
                       <Button size="sm" variant={p.is_recipe ? 'primary' : 'ghost'} onClick={() => openRecipeEditor(p)}>
                         🧪 Recipe
                       </Button>
@@ -314,46 +338,68 @@ export default function Products() {
             <Field label="Brand"><Input value={ed.brand || ''} onChange={(e) => setEd({ ...ed, brand: e.target.value })} /></Field>
             <Field label="Serve mode">
               <Select
-                value={ed.is_recipe ? 'recipe' : ed.is_peg ? '1' : '0'}
+                value={ed.is_local_purchase ? 'local' : ed.is_recipe ? 'recipe' : ed.is_peg ? '1' : '0'}
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (v === 'recipe') setEd({ ...ed, is_recipe: true, is_peg: false, size_ml: 0, unit: ed.unit === 'bottle' ? 'glass' : ed.unit });
-                  else setEd(recalcDraftPrices({ ...ed, is_recipe: false }, undefined, undefined, v === '1'));
+                  if (v === 'local') setEd({ ...ed, is_local_purchase: true, is_recipe: false, is_peg: false, size_ml: 0, purchase_price: 0, selling_price: 0, unit: ed.unit === 'bottle' ? 'unit' : ed.unit });
+                  else if (v === 'recipe') setEd({ ...ed, is_local_purchase: false, is_recipe: true, is_peg: false, size_ml: 0, unit: ed.unit === 'bottle' ? 'glass' : ed.unit });
+                  else setEd(recalcDraftPrices({ ...ed, is_local_purchase: false, is_recipe: false }, undefined, undefined, v === '1'));
                 }}
               >
                 <option value="1">Bottle + Peg (ml tracked)</option>
-                <option value="0">Unit / Bottle / Pack</option>
+                <option value="0">Unit / Bottle / Can / Pack</option>
                 <option value="recipe">Recipe / Composite Drink (auto-deduct ingredients)</option>
+                <option value="local">Local Purchase (Miscellaneous — on-demand cost + margin)</option>
               </Select>
             </Field>
-            {!ed.is_recipe && (
-              <Field label="Bottle size (ml)">
+            {!ed.is_recipe && !ed.is_local_purchase && (
+              <Field label="Bottle / Package size (ml)">
                 <Input type="number" value={ed.size_ml} onChange={(e) => setEd(recalcDraftPrices(ed, undefined, undefined, undefined, e.target.value))} />
               </Field>
             )}
             <Field label="Unit of measure"><Input value={ed.unit} onChange={(e) => setEd({ ...ed, unit: e.target.value })} /></Field>
-            {!ed.is_recipe && (
-              <Field label="Purchase price (per bottle/unit)">
+            {!ed.is_recipe && !ed.is_local_purchase && (
+              <Field label="Purchase price (per bottle/can/unit)">
                 <Input type="number" step="0.01" value={ed.purchase_price} onChange={(e) => setEd(recalcDraftPrices(ed, e.target.value))} />
               </Field>
             )}
-            <Field label={ed.is_recipe ? 'Selling price (independent of recipe cost)' : 'Selling price (auto from margin, editable)'}>
-              <Input type="number" step="0.01" value={ed.selling_price} onChange={(e) => setEd({ ...ed, selling_price: e.target.value })} />
-            </Field>
-            {ed.is_peg && !ed.is_recipe && (
+            {!ed.is_local_purchase && (
+              <Field label={ed.is_recipe ? 'Selling price (independent of recipe cost)' : 'Selling price (editable)'}>
+                <Input type="number" step="0.01" value={ed.selling_price} onChange={(e) => setEd({ ...ed, selling_price: e.target.value })} />
+              </Field>
+            )}
+            {ed.is_peg && !ed.is_recipe && !ed.is_local_purchase && (
               <Field label="30 ml peg selling price" hint="60 ml scales 2×">
                 <Input type="number" step="0.01" value={ed.peg_price} onChange={(e) => setEd({ ...ed, peg_price: e.target.value })} />
               </Field>
             )}
-            {!ed.id && !ed.is_recipe && <Field label="Opening stock (bottles/units)"><Input type="number" step="0.01" value={ed.opening_stock} onChange={(e) => setEd({ ...ed, opening_stock: e.target.value })} /></Field>}
+            {!ed.id && !ed.is_recipe && !ed.is_local_purchase && <Field label="Opening stock (bottles/units)"><Input type="number" step="0.01" value={ed.opening_stock} onChange={(e) => setEd({ ...ed, opening_stock: e.target.value })} /></Field>}
             {ed.is_recipe && (
               <div className="rounded-xl bg-[#422AFB]/10 p-3 text-xs font-medium text-[#1B2559] dark:bg-[#6366F1]/15 dark:text-[#E6EDF3] sm:col-span-3">
                 🍹 Recipe-based drink: ingredient cost and available quantity are computed dynamically from the configured recipe ingredients. Click <b>🧪 Recipe</b> after saving to configure ingredients.
               </div>
             )}
+            {ed.is_local_purchase && (
+              <div className="rounded-xl bg-emerald-500/12 p-3 text-xs font-medium text-emerald-800 dark:bg-emerald-300 sm:col-span-3">
+                🛒 Local Purchase (Miscellaneous): No fixed price or stocked inventory. Bartender enters purchase cost at order time and selling price is auto-calculated using the <b>Miscellaneous</b> category profit margin (default 10%).
+              </div>
+            )}
             <Field label="Product image"><Input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} /></Field>
             <div className="sm:col-span-2"><Field label="Description"><Input value={ed.description || ''} onChange={(e) => setEd({ ...ed, description: e.target.value })} /></Field></div>
-            {ed.id && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!ed.active} onChange={(e) => setEd({ ...ed, active: e.target.checked })} /> Active</label>}
+            <div className="flex flex-wrap items-center gap-4 sm:col-span-3">
+              {!ed.is_local_purchase && (
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={!!ed.party_only} onChange={(e) => setEd({ ...ed, party_only: e.target.checked })} />
+                  🎉 Party Use Only (hidden from regular individual orders)
+                </label>
+              )}
+              {ed.id && (
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={!!ed.active} onChange={(e) => setEd({ ...ed, active: e.target.checked })} />
+                  Active
+                </label>
+              )}
+            </div>
             <div className="flex justify-end gap-2 sm:col-span-3"><Button type="button" variant="ghost" onClick={() => setEd(null)}>Cancel</Button><Button>Save</Button></div>
           </form>
         )}

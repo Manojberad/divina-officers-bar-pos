@@ -334,6 +334,103 @@ const migrations = [
   INSERT OR IGNORE INTO product_recipes(product_id, ingredient_id, qty, display_qty, display_unit)
   SELECT p.id, i.id, 1, 1, 'piece' FROM products p, products i WHERE upper(p.name) = 'MINT MOJITO' AND upper(i.name) = 'FRESH LIME';
   `,
+  // v13: Party-only packaged beverages (Coke/Sprite 250ml & 750ml, Tonic Water can ₹88, Lime ₹13) + Locally Purchased Miscellaneous products with dynamic cost+margin pricing & profit ledger
+  `
+  ALTER TABLE products ADD COLUMN party_only INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN is_local_purchase INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE orders ADD COLUMN is_party INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE order_items ADD COLUMN purchase_cost REAL;
+
+  CREATE TABLE IF NOT EXISTS misc_transactions(
+    id INTEGER PRIMARY KEY,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_name TEXT NOT NULL,
+    qty REAL NOT NULL,
+    unit_purchase_cost REAL NOT NULL,
+    total_purchase_cost REAL NOT NULL,
+    margin_pct REAL NOT NULL,
+    unit_selling_price REAL NOT NULL,
+    total_selling_value REAL NOT NULL,
+    profit REAL NOT NULL,
+    reversed INTEGER NOT NULL DEFAULT 0,
+    user_id INTEGER REFERENCES users(id),
+    at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_misc_tx_order ON misc_transactions(order_id);
+  CREATE INDEX IF NOT EXISTS idx_misc_tx_at ON misc_transactions(at);
+
+  -- Rename Misc category to Miscellaneous with default 10% local-purchase profit margin
+  UPDATE categories SET name = 'Miscellaneous', profit_margin = 10 WHERE name = 'Misc'
+    AND NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Miscellaneous');
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin)
+    VALUES('Miscellaneous', 10, 3, 6, 10);
+  UPDATE categories SET sort = 6, profit_margin = CASE WHEN profit_margin = 0 THEN 10 ELSE profit_margin END
+    WHERE name = 'Miscellaneous';
+
+  -- Reuse existing Tonic Water (complete can @ ₹88) and Fresh Lime (₹13 reference/purchase cost) without duplicating
+  UPDATE products SET unit = 'can', selling_price = 88, description = 'Tonic Water · Complete Can'
+    WHERE upper(name) = 'TONIC WATER';
+  UPDATE products SET purchase_price = 13, selling_price = 13, description = 'Fresh Lime · Complete Piece'
+    WHERE upper(name) = 'FRESH LIME';
+
+  -- Add Coke & Sprite 250 ml (regular + party) and 750 ml (Party Use Only) on existing station DBs
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Coca-Cola 250 ml', (SELECT id FROM categories WHERE name = 'Soft Drinks'), 'Soda', 'Coca-Cola', 'Chilled Coca-Cola · 250 ml Bottle', '/uploads/real-coca-cola-250-ml.jpg', 250, 'bottle', 0, 0, 0, 0, 18, 20, 0, 30, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'COCA-COLA 250 ML');
+
+  INSERT INTO stock_movements(product_id, type, qty, unit_cost, note, at)
+  SELECT id, 'opening', 30, 18, 'Opening Stock: 30 bottle(s)', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM products WHERE upper(name) = 'COCA-COLA 250 ML'
+    AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_id = products.id);
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Coca-Cola 750 ml', (SELECT id FROM categories WHERE name = 'Soft Drinks'), 'Soda', 'Coca-Cola', 'Coca-Cola · 750 ml Bottle (Party Use Only)', '/uploads/real-coca-cola-750-ml.jpg', 750, 'bottle', 0, 0, 1, 0, 36, 40, 0, 24, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'COCA-COLA 750 ML');
+
+  INSERT INTO stock_movements(product_id, type, qty, unit_cost, note, at)
+  SELECT id, 'opening', 24, 36, 'Opening Stock: 24 bottle(s)', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM products WHERE upper(name) = 'COCA-COLA 750 ML'
+    AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_id = products.id);
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Sprite 250 ml', (SELECT id FROM categories WHERE name = 'Soft Drinks'), 'Soda', 'Sprite', 'Chilled Sprite · 250 ml Bottle', '/uploads/real-sprite-250-ml.jpg', 250, 'bottle', 0, 0, 0, 0, 18, 20, 0, 30, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SPRITE 250 ML');
+
+  INSERT INTO stock_movements(product_id, type, qty, unit_cost, note, at)
+  SELECT id, 'opening', 30, 18, 'Opening Stock: 30 bottle(s)', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM products WHERE upper(name) = 'SPRITE 250 ML'
+    AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_id = products.id);
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Sprite 750 ml', (SELECT id FROM categories WHERE name = 'Soft Drinks'), 'Soda', 'Sprite', 'Sprite · 750 ml Bottle (Party Use Only)', '/uploads/real-sprite-750-ml.jpg', 750, 'bottle', 0, 0, 1, 0, 36, 40, 0, 24, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SPRITE 750 ML');
+
+  INSERT INTO stock_movements(product_id, type, qty, unit_cost, note, at)
+  SELECT id, 'opening', 24, 36, 'Opening Stock: 24 bottle(s)', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM products WHERE upper(name) = 'SPRITE 750 ML'
+    AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_id = products.id);
+
+  -- Add initial locally purchased Miscellaneous products (no fixed selling price, on-demand purchase cost + margin)
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Coconut Water', (SELECT id FROM categories WHERE name = 'Miscellaneous'), NULL, 'Local Purchase', 'Fresh tender coconut water (locally purchased on demand)', '/uploads/real-coconut-water.jpg', 0, 'unit', 0, 0, 0, 1, 0, 0, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'COCONUT WATER');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Fresh Fruit Juices', (SELECT id FROM categories WHERE name = 'Miscellaneous'), NULL, 'Local Purchase', 'Fresh seasonal fruit juice (locally purchased on demand)', '/uploads/real-fresh-fruit-juices.jpg', 0, 'glass', 0, 0, 0, 1, 0, 0, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'FRESH FRUIT JUICES');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Sugarcane Juice', (SELECT id FROM categories WHERE name = 'Miscellaneous'), NULL, 'Local Purchase', 'Fresh sugarcane juice (locally purchased on demand)', '/uploads/real-sugarcane-juice.jpg', 0, 'glass', 0, 0, 0, 1, 0, 0, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML')
+    AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SUGARCANE JUICE');
+  `,
 ];
 
 export function migrate() {
@@ -386,7 +483,7 @@ export function getSettings() {
 
 export const ALL_TABLES = [
   'users', 'categories', 'products', 'product_recipes', 'tables', 'orders', 'order_items', 'order_events',
-  'recipe_consumptions', 'stock_movements', 'reconciliations', 'favorite_orders', 'settings', 'audit_logs', 'notifications',
+  'recipe_consumptions', 'misc_transactions', 'stock_movements', 'reconciliations', 'favorite_orders', 'settings', 'audit_logs', 'notifications',
 ];
 
 export function audit(userId, action, entity, entityId, details) {

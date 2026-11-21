@@ -20,8 +20,11 @@ const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 export function applyCategoryMargin(categoryId, marginPct) {
   const m = Math.max(0, Number(marginPct) || 0);
-  // Keep recipe/composite products' selling prices independent of ingredient purchase cost
-  const prods = q.all('SELECT id, purchase_price, is_peg, size_ml FROM products WHERE category_id=? AND is_recipe=0', categoryId);
+  const cat = q.get('SELECT name FROM categories WHERE id=?', categoryId);
+  // For Miscellaneous, the margin governs dynamic on-demand local-purchase pricing without overwriting stocked Lime/Disposables
+  if (cat && /^misc/i.test(cat.name)) return 0;
+  // Keep recipe/composite and local-purchase products independent of bulk purchase-price recalculation
+  const prods = q.all('SELECT id, purchase_price, is_peg, size_ml FROM products WHERE category_id=? AND is_recipe=0 AND is_local_purchase=0', categoryId);
   let updated = 0;
   for (const p of prods) {
     const pp = Number(p.purchase_price) || 0;
@@ -88,13 +91,14 @@ r.get('/products', optionalAuth, (req, res) => {
   const staff = isStaff(req.user);
   const rows = q.all(`${PRODUCT_SELECT} ${staff && req.query.all ? '' : 'WHERE p.active=1'} ORDER BY c.sort, p.name`).map(decorate);
   if (staff) return res.json(rows);
-  // Public / customer view hides costs and exact stock
-  res.json(rows.map(publicView));
+  // Regular customer view hides costs, exact stock, party-only 750ml variants & bartender-only local-purchase items
+  res.json(rows.filter((p) => !p.party_only && !p.is_local_purchase).map(publicView));
 });
 
 export const publicView = (p) => ({
   id: p.id, name: p.name, category: p.category, category_id: p.category_id, sub_category: p.sub_category || null, brand: p.brand, description: p.description, image: p.image,
-  size_ml: p.size_ml, unit: p.unit, is_peg: p.is_peg, food_type: p.food_type || null, selling_price: p.selling_price, peg_price: p.peg_price,
+  size_ml: p.size_ml, unit: p.unit, is_peg: p.is_peg, party_only: !!p.party_only, is_local_purchase: !!p.is_local_purchase,
+  food_type: p.food_type || null, selling_price: p.selling_price, peg_price: p.peg_price,
   favourite: p.favourite, available: p.stock_status !== 'out', active: p.active,
 });
 
@@ -271,11 +275,20 @@ function productFields(b) {
   if (!foodType && subCat === 'Non-Veg') foodType = 'nonveg';
   if (!subCat && foodType === 'veg') subCat = 'Veg';
   if (!subCat && foodType === 'nonveg') subCat = 'Non-Veg';
-  const isRecipe = b.is_recipe === true || b.is_recipe === '1' || b.is_recipe === 1 || b.is_recipe === 'true' ? 1 : 0;
-  const isPeg = isRecipe ? 0 : (b.is_peg === true || b.is_peg === '1' || b.is_peg === 1 || b.is_peg === 'true' ? 1 : 0);
-  return [b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null, isRecipe ? 0 : (Number(b.size_ml) || 0), b.unit || (isRecipe ? 'glass' : 'bottle'),
-    isPeg, isRecipe,
-    Number(b.purchase_price) || 0, Number(b.selling_price) || 0, isPeg ? (Number(b.peg_price) || 0) : 0, numOrNull(b.min_stock), numOrNull(b.critical_stock), foodType];
+  const toBit = (v) => (v === true || v === '1' || v === 1 || v === 'true' ? 1 : 0);
+  const isLocal = toBit(b.is_local_purchase);
+  const isRecipe = isLocal ? 0 : toBit(b.is_recipe);
+  const isPeg = isRecipe || isLocal ? 0 : toBit(b.is_peg);
+  const partyOnly = toBit(b.party_only);
+  return [
+    b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null,
+    isRecipe || isLocal ? 0 : (Number(b.size_ml) || 0), b.unit || (isRecipe ? 'glass' : isLocal ? 'unit' : 'bottle'),
+    isPeg, isRecipe, partyOnly, isLocal,
+    isLocal ? 0 : (Number(b.purchase_price) || 0),
+    isLocal ? 0 : (Number(b.selling_price) || 0),
+    isPeg ? (Number(b.peg_price) || 0) : 0,
+    numOrNull(b.min_stock), numOrNull(b.critical_stock), foodType,
+  ];
 }
 
 r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res) => {
@@ -283,14 +296,14 @@ r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res
   if (!b.name?.trim()) return res.status(400).json({ error: 'Name required' });
   const f = productFields(b);
   if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
-  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, is_recipe, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
-  const opening = f[8] ? 0 : (Number(b.opening_stock) || 0);
+  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
+  const opening = f[8] || f[10] ? 0 : (Number(b.opening_stock) || 0);
   if (opening > 0) {
     const p = getProduct(id);
     moveStock({ productId: id, type: 'opening', qty: toBase(p, opening), unitCost: baseCost(p), userId: req.user.id, note: 'Opening stock' });
   }
-  audit(req.user.id, 'product.create', 'product', id, { name: b.name, is_recipe: !!f[8] });
+  audit(req.user.id, 'product.create', 'product', id, { name: b.name, is_recipe: !!f[8], party_only: !!f[9], is_local_purchase: !!f[10] });
   res.status(201).json(decorate(getProduct(id)));
 });
 
@@ -303,7 +316,7 @@ r.put('/products/:id', requireRole('admin'), imageUpload.single('image'), (req, 
   if (!!f[7] !== !!p.is_peg && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing peg mode' });
   if (f[7] && p.is_peg && f[5] !== p.size_ml && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing bottle size' });
   const image = req.file ? `/uploads/${req.file.filename}` : b.image;
-  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, is_recipe=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
+  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, is_recipe=?, party_only=?, is_local_purchase=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
     ...f, image, b.active === false || b.active === '0' || b.active === 'false' || b.active === 0 ? 0 : 1, p.id);
   const priceChange = ['purchase_price', 'selling_price', 'peg_price'].filter((k) => req.body[k] != null && Number(req.body[k]) !== p[k]);
   audit(req.user.id, priceChange.length ? 'product.price_change' : 'product.update', 'product', p.id,
@@ -381,7 +394,7 @@ r.get('/menu/:code', (req, res) => {
     table: t,
     bar: { name: s.bar_name, logo: s.logo, currency: s.currency, peg_sizes: s.peg_sizes },
     categories: q.all('SELECT id, name FROM categories ORDER BY sort, name'),
-    products: q.all(`${PRODUCT_SELECT} WHERE p.active=1 ORDER BY c.sort, p.name`).map(decorate).map(publicView),
+    products: q.all(`${PRODUCT_SELECT} WHERE p.active=1 AND p.party_only=0 AND p.is_local_purchase=0 ORDER BY c.sort, p.name`).map(decorate).map(publicView),
   });
 });
 

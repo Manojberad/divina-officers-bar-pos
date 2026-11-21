@@ -11,7 +11,7 @@ export const STATION_SUNDRIES = [
   [20, 'Soft Drinks', 'Soda', null, 'GRENADINE SYRUP', 'loose', 3, 30.38, 'Mixer / Syrup · Grenadine', 'prod-tonic-water.jpg', 0],
   [21, 'Soft Drinks', 'Soda', null, 'MINT SYRUP', 'loose', 63, 11.96, 'Mixer / Syrup · Mint', 'prod-tonic-water.jpg', 0],
   [22, 'Soft Drinks', 'Soda', null, 'KOKAM SYRUP', 'loose', 0, 6.40, 'Mixer / Syrup · Kokam', 'prod-tonic-water.jpg', 0],
-  [23, 'Soft Drinks', 'Soda', null, 'TONIC WATER', 'bottle', 20, 60.00, 'Mixer · Tonic Water Bottle', 'prod-tonic-water.jpg', 1],
+  [23, 'Soft Drinks', 'Soda', null, 'TONIC WATER', 'can', 20, 60.00, 'Tonic Water · Complete Can', 'prod-tonic-water.jpg', 1],
 
   // Soft Drinks -> Juices (12 items)
   [7, 'Soft Drinks', 'Juices', null, 'APPY FIZZ', 'pkt', 0, 20.00, 'Juice / Sparkling Apple · Appy Fizz', 'prod-cola-300ml.jpg', 0],
@@ -39,10 +39,10 @@ export const STATION_SUNDRIES = [
   [32, 'Cigarettes', null, null, 'WILLS', 'pkt', 23, 124.00, 'Cigarettes · Pack', 'prod-roasted-peanuts.jpg', 0],
   [33, 'Cigarettes', null, null, 'DANIL', 'pkt', 0, 320.00, 'Cigarettes · Pack', 'prod-roasted-peanuts.jpg', 0],
 
-  // Misc (3 items — Disposable glasses, Ice, Fresh lime)
-  [54, 'Misc', null, null, 'DISPOSAL GLASS', 'pkt', 0, 166.67, 'Disposables · Plastic Glass Pack', 'prod-mineral-water-1l.jpg', 0],
-  [34, 'Misc', null, null, 'FRESH LIME', 'each', 20, 15.50, 'Fresh items · Lime', 'prod-mineral-water-1l.jpg', 1],
-  [35, 'Misc', null, null, 'ICE CUBE', 'pkt', 4, 30.00, 'Ice · Cube Pack', 'prod-mineral-water-1l.jpg', 1],
+  // Miscellaneous (3 stocked items — Disposable glasses, Ice, Fresh lime @ ₹13)
+  [54, 'Miscellaneous', null, null, 'DISPOSAL GLASS', 'pkt', 0, 166.67, 'Disposables · Plastic Glass Pack', 'prod-mineral-water-1l.jpg', 0],
+  [34, 'Miscellaneous', null, null, 'FRESH LIME', 'each', 20, 13.00, 'Fresh Lime · Complete Piece', 'prod-mineral-water-1l.jpg', 1],
+  [35, 'Miscellaneous', null, null, 'ICE CUBE', 'pkt', 4, 30.00, 'Ice · Cube Pack', 'prod-mineral-water-1l.jpg', 1],
 
   // Food -> Packed (1 item)
   [1, 'Food', 'Packed', null, 'SNACKS 60 GM', 'pkt', 117, 10.00, 'Snacks · 60 gm Pack', 'prod-roasted-peanuts.jpg', 1],

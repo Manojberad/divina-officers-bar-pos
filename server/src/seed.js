@@ -7,7 +7,7 @@ import { createOrder, transition, moveStock, getProduct, toBase, baseCost } from
 import { STATION_OFFICERS } from './officers-data.js';
 import { STATION_ALCOHOL } from './alcohol-data.js';
 import { STATION_SUNDRIES } from './sundries-data.js';
-import { STATION_MOCKTAILS } from './mocktails-data.js';
+import { STATION_MOCKTAILS, STATION_PACKAGED_BEVERAGES, STATION_LOCAL_MISC } from './mocktails-data.js';
 
 const svg = (label, color, kind) => {
   const shape = kind === 'bottle'
@@ -27,7 +27,7 @@ const CATS = [
   ['Soft Drinks', 24, 10, 10],
   ['Food', 10, 4, 10],
   ['Cigarettes', 10, 3, 7.5],
-  ['Misc', 10, 3, 0],
+  ['Miscellaneous', 10, 3, 10],
 ];
 // name, cat, sub_category, brand, size, unit, is_peg, purchase, selling(bottle/unit), peg_price(30ml), stock(bottles/units), color, kind, desc
 const PRODUCTS = [
@@ -254,10 +254,10 @@ export function seedStation() {
       }
     }
 
-    // 54 Sundries Items (Soft Drinks 10%, Food 10%, Cigarettes 7.5%, Misc 0%)
+    // 54 Sundries Items (Soft Drinks 10%, Food 10%, Cigarettes 7.5%, Miscellaneous stocked items @ cost / Tonic Water @ ₹88)
     for (const [, catName, subCat, foodType, name, unit, qty, purchaseRate, desc, imgFile, fav] of STATION_SUNDRIES) {
-      const m = marginMap[catName] ?? 0;
-      const sellingPrice = Math.round(purchaseRate * (1 + m / 100) * 100) / 100;
+      const m = catName === 'Miscellaneous' ? 0 : (marginMap[catName] ?? 0);
+      const sellingPrice = name === 'TONIC WATER' ? 88 : Math.round(purchaseRate * (1 + m / 100) * 100) / 100;
       const pid = Number(
         q.run(
           `INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, stock, favourite, active)
@@ -269,6 +269,31 @@ export function seedStation() {
         const p = getProduct(pid);
         moveStock({ productId: pid, type: 'opening', qty, unitCost: baseCost(p), userId: adminId, note: `Opening Sundries Stock: ${qty} ${unit}` });
       }
+    }
+
+    // Packaged Carbonated Beverages (Coke & Sprite 250 ml regular + 750 ml Party Use Only)
+    for (const b of STATION_PACKAGED_BEVERAGES) {
+      const pid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,?,?,?,?,?,?,0,0,?,0,?,?,0,0,?,1)`,
+          b.name, catMap[b.category], b.sub_category, b.brand, b.description, resolveImage(b.name, path.basename(b.image)),
+          b.size_ml, b.unit, b.party_only, b.purchase_price, b.selling_price, b.favourite,
+        ).lastInsertRowid,
+      );
+      if (b.stock > 0) {
+        const p = getProduct(pid);
+        moveStock({ productId: pid, type: 'opening', qty: b.stock, unitCost: baseCost(p), userId: adminId, note: `Opening Stock: ${b.stock} ${b.unit}(s)` });
+      }
+    }
+
+    // Locally Purchased Miscellaneous Products (no fixed selling price; priced dynamically at Purchase Cost + Miscellaneous margin)
+    for (const lm of STATION_LOCAL_MISC) {
+      q.run(
+        `INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, stock, favourite, active)
+         VALUES(?,?,NULL,'Local Purchase',?,?,0,?,0,0,0,1,0,0,0,0,0,1)`,
+        lm.name, catMap[lm.category], lm.description, resolveImage(lm.name, path.basename(lm.image)), lm.unit,
+      );
     }
 
     // Recipe-based Mocktails (Blue Lagoon & Mint Mojito) reusing existing inventory ingredients
@@ -291,7 +316,7 @@ export function seedStation() {
       }
     }
   });
-  console.log('[seed] station dataset ready (62 accounts, 6 categories, 114 products incl. 2 recipe mocktails)');
+  console.log('[seed] station dataset ready (62 accounts, 6 categories, 121 products incl. Coke/Sprite variants, 2 recipe mocktails & 3 local misc items)');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

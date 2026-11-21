@@ -35,3 +35,18 @@ export const STATION_MOCKTAILS = [
     ],
   },
 ];
+
+// Packaged carbonated beverages (Coke & Sprite 250 ml regular + 750 ml Party Use Only)
+export const STATION_PACKAGED_BEVERAGES = [
+  { name: 'Coca-Cola 250 ml', category: 'Soft Drinks', sub_category: 'Soda', brand: 'Coca-Cola', size_ml: 250, unit: 'bottle', party_only: 0, purchase_price: 18, selling_price: 20, stock: 30, description: 'Chilled Coca-Cola · 250 ml Bottle', image: '/uploads/real-coca-cola-250-ml.jpg', favourite: 1 },
+  { name: 'Coca-Cola 750 ml', category: 'Soft Drinks', sub_category: 'Soda', brand: 'Coca-Cola', size_ml: 750, unit: 'bottle', party_only: 1, purchase_price: 36, selling_price: 40, stock: 24, description: 'Coca-Cola · 750 ml Bottle (Party Use Only)', image: '/uploads/real-coca-cola-750-ml.jpg', favourite: 0 },
+  { name: 'Sprite 250 ml', category: 'Soft Drinks', sub_category: 'Soda', brand: 'Sprite', size_ml: 250, unit: 'bottle', party_only: 0, purchase_price: 18, selling_price: 20, stock: 30, description: 'Chilled Sprite · 250 ml Bottle', image: '/uploads/real-sprite-250-ml.jpg', favourite: 1 },
+  { name: 'Sprite 750 ml', category: 'Soft Drinks', sub_category: 'Soda', brand: 'Sprite', size_ml: 750, unit: 'bottle', party_only: 1, purchase_price: 36, selling_price: 40, stock: 24, description: 'Sprite · 750 ml Bottle (Party Use Only)', image: '/uploads/real-sprite-750-ml.jpg', favourite: 0 },
+];
+
+// Locally purchased on-demand Miscellaneous products (priced dynamically at Purchase Cost × (1 + margin/100))
+export const STATION_LOCAL_MISC = [
+  { name: 'Coconut Water', category: 'Miscellaneous', unit: 'unit', description: 'Fresh tender coconut water (locally purchased on demand)', image: '/uploads/real-coconut-water.jpg' },
+  { name: 'Fresh Fruit Juices', category: 'Miscellaneous', unit: 'glass', description: 'Fresh seasonal fruit juice (locally purchased on demand)', image: '/uploads/real-fresh-fruit-juices.jpg' },
+  { name: 'Sugarcane Juice', category: 'Miscellaneous', unit: 'glass', description: 'Fresh sugarcane juice (locally purchased on demand)', image: '/uploads/real-sugarcane-juice.jpg' },
+];

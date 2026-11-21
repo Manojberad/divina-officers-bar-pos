@@ -6,7 +6,8 @@ import { Button, Field, Input, Modal, Select, StockDot, Textarea, cx } from '../
 
 export interface Product {
   id: number; name: string; category: string; category_id: number; sub_category?: string | null; brand?: string; description?: string; image?: string; size_ml: number; unit: string;
-  is_peg: boolean; food_type?: 'veg' | 'nonveg' | null; selling_price: number; peg_price: number; favourite: boolean; available?: boolean; stock_status?: string; stock_display?: number; stock_unit?: string;
+  is_peg: boolean; is_recipe?: boolean; party_only?: boolean; is_local_purchase?: boolean; local_margin_pct?: number;
+  food_type?: 'veg' | 'nonveg' | null; selling_price: number; peg_price: number; favourite: boolean; available?: boolean; stock_status?: string; stock_display?: number; stock_unit?: string;
   full_bottles?: number; loose_pegs_30ml?: number;
 }
 
@@ -24,9 +25,13 @@ const VegMark = ({ type }: { type?: 'veg' | 'nonveg' | null }) =>
       <span className="h-2 w-2 rounded-full bg-red-600" />
     </span>
   ) : null;
-interface Line { key: string; product_id: number; name: string; image?: string; serve_type: 'bottle' | 'peg' | 'unit'; peg_ml?: number; qty: number; unit_price: number; custom_price?: boolean }
+interface Line {
+  key: string; product_id: number; name: string; image?: string; serve_type: 'bottle' | 'peg' | 'unit'; peg_ml?: number;
+  qty: number; unit_price: number; custom_price?: boolean; party_only?: boolean; is_local_purchase?: boolean; purchase_cost?: number; margin_pct?: number;
+}
 
-const lineKey = (pid: number, serve: string, ml?: number) => `${pid}-${serve}-${ml || ''}`;
+const lineKey = (pid: number, serve: string, ml?: number, purchaseCost?: number) =>
+  purchaseCost != null ? `${pid}-local-${purchaseCost}` : `${pid}-${serve}-${ml || ''}`;
 
 export default function POS({ mode, tableCode, preload, onPlaced, readOnly = false }: { mode: 'staff' | 'self' | 'qr'; tableCode?: string; preload?: { products: Product[]; categories: any[] }; onPlaced?: () => void; readOnly?: boolean }) {
   const { user, money, toast, reloadUser } = useApp();
@@ -38,12 +43,25 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Line[]>(() => JSON.parse(localStorage.getItem(`cart-${mode}`) || '[]'));
   const [picker, setPicker] = useState<Product | null>(null);
+  const [localModal, setLocalModal] = useState<{ p: Product; qty: string; cost: string } | null>(null);
+  const [isParty, setIsParty] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [tables, setTables] = useState<any[]>([]);
   const [opts, setOpts] = useState({ user_id: '', table_id: '', notes: '', type: 'ondemand', scheduled_at: '' });
   const [busy, setBusy] = useState(false);
   const [showCart, setShowCart] = useState(false);
   const [showQuickMenu, setShowQuickMenu] = useState(false);
+
+  const togglePartyMode = (next: boolean) => {
+    setIsParty(next);
+    if (!next) {
+      setCart((prev) => {
+        const removed = prev.filter((l) => l.party_only);
+        if (removed.length) toast(`Removed ${removed.length} Party-Only item(s) for Regular Order`);
+        return prev.filter((l) => !l.party_only);
+      });
+    }
+  };
 
   const load = () => {
     if (preload) return;
@@ -70,20 +88,26 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
     return 'Packed';
   };
 
+  // Hide Party-Use-Only variants (750 ml Coke/Sprite) during regular individual ordering
+  const visibleProducts = useMemo(
+    () => products.filter((p) => (!p.party_only || (staff && isParty)) && (!p.is_local_purchase || staff)),
+    [products, staff, isParty],
+  );
+
   // Dynamic Alcohol sub-categories present in inventory (ordered cleanly)
   const alcoholSubs = useMemo(() => {
     if (!isAlcoholCat) return [];
     const set = new Set<string>();
-    products.filter((p) => p.category_id === cat).forEach((p) => { if (p.sub_category) set.add(p.sub_category); });
+    visibleProducts.filter((p) => p.category_id === cat).forEach((p) => { if (p.sub_category) set.add(p.sub_category); });
     return [
       ...ALCOHOL_SUB_ORDER.filter((s) => set.has(s)),
       ...[...set].filter((s) => !ALCOHOL_SUB_ORDER.includes(s)).sort(),
     ];
-  }, [products, cat, isAlcoholCat]);
+  }, [visibleProducts, cat, isAlcoholCat]);
 
   const shown = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return products.filter((p) => {
+    return visibleProducts.filter((p) => {
       if (s) {
         return `${p.name} ${p.brand || ''} ${p.category || ''} ${p.sub_category || ''}`.toLowerCase().includes(s);
       }
@@ -100,17 +124,40 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
       }
       return true;
     });
-  }, [products, cat, subCat, isAlcoholCat, isSoftDrinksCat, isFoodCat, search]);
+  }, [visibleProducts, cat, subCat, isAlcoholCat, isSoftDrinksCat, isFoodCat, search]);
 
   const add = (p: Product, serve: Line['serve_type'], peg_ml?: number) => {
     const unit_price = serve === 'peg' ? Math.round((p.peg_price * (peg_ml || 30)) / 30 * 100) / 100 : p.selling_price;
     const key = lineKey(p.id, serve, peg_ml);
-    setCart((c) => (c.find((l) => l.key === key) ? c.map((l) => (l.key === key ? { ...l, qty: l.qty + 1 } : l)) : [...c, { key, product_id: p.id, name: p.name, image: p.image, serve_type: serve, peg_ml, qty: 1, unit_price }]));
+    setCart((c) => (c.find((l) => l.key === key) ? c.map((l) => (l.key === key ? { ...l, qty: l.qty + 1 } : l)) : [...c, { key, product_id: p.id, name: p.name, image: p.image, serve_type: serve, peg_ml, qty: 1, unit_price, party_only: !!p.party_only }]));
     setPicker(null);
   };
-  const isOut = (p: Product) => p.stock_status === 'out' || p.available === false;
+  const addLocalMisc = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!localModal) return;
+    const p = localModal.p;
+    const qty = Math.floor(Number(localModal.qty));
+    const cost = Math.round(Number(localModal.cost) * 100) / 100;
+    if (!(qty > 0)) return toast('Enter a valid whole quantity', 'error');
+    if (!(cost > 0)) return toast('Enter the purchase cost (₹)', 'error');
+    const margin = Number(p.local_margin_pct ?? 10);
+    const unit_price = Math.round(cost * (1 + margin / 100) * 100) / 100;
+    const key = lineKey(p.id, 'unit', undefined, cost);
+    setCart((c) => (
+      c.find((l) => l.key === key)
+        ? c.map((l) => (l.key === key ? { ...l, qty: l.qty + qty } : l))
+        : [...c, { key, product_id: p.id, name: p.name, image: p.image, serve_type: 'unit', qty, unit_price, is_local_purchase: true, purchase_cost: cost, margin_pct: margin }]
+    ));
+    setLocalModal(null);
+  };
+  const isOut = (p: Product) => !p.is_local_purchase && (p.stock_status === 'out' || p.available === false);
   const tap = (p: Product) => {
     if (readOnly) return;
+    if (p.is_local_purchase) {
+      if (!staff) return toast('Locally purchased items are ordered by the bartender', 'error');
+      setLocalModal({ p, qty: '1', cost: '' });
+      return;
+    }
     if (isOut(p)) return toast(`${p.name} is out of stock`, 'error');
     if (p.is_peg) setPicker(p); else add(p, 'unit');
   };
@@ -129,8 +176,18 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
     setBusy(true);
     try {
       const body: any = {
-        items: cart.map((l) => ({ product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty, ...(staff && l.custom_price ? { unit_price: l.unit_price } : {}) })),
-        notes: opts.notes || undefined, type: opts.type, scheduled_at: opts.type === 'prebooked' ? new Date(opts.scheduled_at).toISOString() : undefined, status,
+        items: cart.map((l) => ({
+          product_id: l.product_id,
+          serve_type: l.serve_type,
+          peg_ml: l.peg_ml,
+          qty: l.qty,
+          ...(l.is_local_purchase ? { purchase_cost: l.purchase_cost } : (staff && l.custom_price ? { unit_price: l.unit_price } : {})),
+        })),
+        notes: opts.notes || undefined,
+        type: opts.type,
+        is_party: staff && isParty,
+        scheduled_at: opts.type === 'prebooked' ? new Date(opts.scheduled_at).toISOString() : undefined,
+        status,
         source: mode === 'qr' ? 'qr' : staff ? 'pos' : 'app',
       };
       if (staff) { body.user_id = opts.user_id || undefined; body.table_id = opts.table_id || undefined; }
@@ -172,20 +229,36 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
           <div key={l.key} className="flex items-center gap-2.5 rounded-2xl bg-[#F4F7FE] p-3 dark:bg-[#252D3D]">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-bold text-[#1B2559] dark:text-[#E6EDF3]">{l.name}</div>
-              <div className="mt-0.5 flex items-center gap-1 text-xs font-medium text-[#94A3B8]">
-                {l.serve_type === 'peg'
-                  ? l.peg_ml === 30
-                    ? 'Small (30 ml)'
-                    : l.peg_ml === 60
-                      ? 'Large (60 ml)'
-                      : `Peg ${l.peg_ml} ml`
-                  : l.serve_type === 'bottle'
-                    ? 'Full Bottle (750 ml)'
-                    : 'Unit'} ·
-                {staff ? (
-                  <input type="number" className="w-20 rounded-lg border border-[#E0E5F2] bg-white px-1.5 py-0.5 text-xs font-bold text-[#1B2559] dark:border-[#2E384D] dark:bg-[#151A25] dark:text-[#E6EDF3]" value={l.unit_price}
-                    onChange={(e) => setCart((c) => c.map((x) => (x.key === l.key ? { ...x, unit_price: Number(e.target.value), custom_price: true } : x)))} />
-                ) : money(l.unit_price)}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs font-medium text-[#94A3B8]">
+                {l.is_local_purchase ? (
+                  <>
+                    <span className="rounded bg-[#422AFB]/12 px-1.5 py-0.5 text-[10px] font-bold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
+                      Cost {money(l.purchase_cost || 0)}
+                    </span>
+                    <span>→</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {money(l.unit_price)} (+{l.margin_pct ?? 10}%)
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {l.serve_type === 'peg'
+                      ? l.peg_ml === 30
+                        ? 'Small (30 ml)'
+                        : l.peg_ml === 60
+                          ? 'Large (60 ml)'
+                          : `Peg ${l.peg_ml} ml`
+                      : l.serve_type === 'bottle'
+                        ? 'Full Bottle (750 ml)'
+                        : l.party_only
+                          ? '🎉 Party 750 ml'
+                          : 'Unit'} ·
+                    {staff ? (
+                      <input type="number" className="w-20 rounded-lg border border-[#E0E5F2] bg-white px-1.5 py-0.5 text-xs font-bold text-[#1B2559] dark:border-[#2E384D] dark:bg-[#151A25] dark:text-[#E6EDF3]" value={l.unit_price}
+                        onChange={(e) => setCart((c) => c.map((x) => (x.key === l.key ? { ...x, unit_price: Number(e.target.value), custom_price: true } : x)))} />
+                    ) : money(l.unit_price)}
+                  </>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -290,9 +363,40 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
           </div>
         )}
 
-        {/* Search & Category Controls */}
+        {/* Search, Staff Party Order Toggle & Category Controls */}
         <div className="mb-3 space-y-2">
-          <Input placeholder="🔍 Search whisky, rum, juice, snacks…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Input placeholder="🔍 Search whisky, rum, coke, mocktails, snacks…" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 flex-1" />
+            {staff && !readOnly && (
+              <div className="inline-flex shrink-0 rounded-2xl border border-[#E0E5F2] bg-white p-1 dark:border-[#2E384D] dark:bg-[#1C2230]">
+                <button
+                  type="button"
+                  onClick={() => togglePartyMode(false)}
+                  className={cx(
+                    'rounded-xl px-3 py-1.5 text-xs font-extrabold transition',
+                    !isParty ? 'bg-[#422AFB] text-white shadow-xs dark:bg-[#6366F1]' : 'text-[#707EAE] dark:text-[#94A3B8]',
+                  )}
+                >
+                  Regular
+                </button>
+                <button
+                  type="button"
+                  onClick={() => togglePartyMode(true)}
+                  className={cx(
+                    'rounded-xl px-3 py-1.5 text-xs font-extrabold transition',
+                    isParty ? 'bg-[#D97706] text-white shadow-xs' : 'text-[#707EAE] dark:text-[#94A3B8]',
+                  )}
+                >
+                  🎉 Party Order
+                </button>
+              </div>
+            )}
+          </div>
+          {staff && isParty && (
+            <div className="rounded-xl border border-[#FBBF24]/40 bg-[#FBBF24]/15 px-3 py-1.5 text-xs font-bold text-[#92400E] dark:text-[#FCD34D]">
+              🎉 Party Order Mode active — 750 ml Party Use Only Coke &amp; Sprite bottles are now unlocked for selection.
+            </div>
+          )}
 
           {/* MOBILE ONLY (< md): Favorites Button + Category Dropdown + Sub-Category Dropdown (ZERO horizontal scroll!) */}
           <div className="space-y-2 md:hidden">
@@ -322,7 +426,7 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
                 <option value="">All Categories…</option>
                 {categories.map((c: any) => (
                   <option key={c.id} value={String(c.id)}>
-                    {c.name} ({products.filter((p) => p.category_id === c.id).length})
+                    {c.name} ({visibleProducts.filter((p) => p.category_id === c.id).length})
                   </option>
                 ))}
               </Select>
@@ -518,9 +622,19 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
                 >
                   <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-[#F4F7FE] dark:bg-[#252D3D]">
                     {p.image ? <img src={p.image} alt={p.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center text-4xl">🍹</div>}
-                    <div className="absolute left-2.5 top-2.5 flex items-center gap-1.5">
+                    <div className="absolute left-2.5 top-2.5 flex flex-wrap items-center gap-1">
                       {ft && <span className="shadow-sm"><VegMark type={ft} /></span>}
-                      {p.sub_category && !ft && (
+                      {p.party_only && (
+                        <span className="rounded-full bg-[#D97706] px-2 py-0.5 text-[10px] font-extrabold text-white shadow-xs">
+                          🎉 Party Only
+                        </span>
+                      )}
+                      {p.is_local_purchase && (
+                        <span className="rounded-full bg-[#422AFB] px-2 py-0.5 text-[10px] font-extrabold text-white shadow-xs">
+                          Local Purchase
+                        </span>
+                      )}
+                      {p.sub_category && !ft && !p.party_only && !p.is_local_purchase && (
                         <span className="rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur-xs">
                           {p.sub_category}
                         </span>
@@ -540,18 +654,34 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
                       {p.name}
                     </div>
                     <div className="mt-0.5 truncate text-[11px] font-medium text-[#94A3B8]">
-                      {p.is_peg ? `30 ml ${money(p.peg_price)} · 60 ml ${money(Math.round(p.peg_price * 2 * 100) / 100)}` : p.description || p.category}
+                      {p.is_local_purchase
+                        ? `Enter purchase cost (+${p.local_margin_pct ?? 10}%)`
+                        : p.is_peg
+                          ? `30 ml ${money(p.peg_price)} · 60 ml ${money(Math.round(p.peg_price * 2 * 100) / 100)}`
+                          : p.description || p.category}
                     </div>
                     <div className="mt-2.5 flex items-center justify-between gap-1">
                       <div className="min-w-0">
-                        <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
-                          {p.is_peg ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
-                        </span>
-                        {p.is_peg && staff && (
-                          <div className="text-[10px] font-semibold text-[#94A3B8]">Btl: {money(p.selling_price)}</div>
+                        {p.is_local_purchase ? (
+                          <span className="inline-flex items-center rounded-lg bg-[#422AFB]/10 px-2 py-0.5 text-xs font-extrabold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
+                            Tap to Enter Cost
+                          </span>
+                        ) : (
+                          <>
+                            <span className="text-sm font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                              {p.is_peg ? `${money(p.peg_price)} / 30ml` : money(p.selling_price)}
+                            </span>
+                            {p.is_peg && staff && (
+                              <div className="text-[10px] font-semibold text-[#94A3B8]">Btl: {money(p.selling_price)}</div>
+                            )}
+                          </>
                         )}
                       </div>
-                      {p.stock_status ? <StockDot s={p.stock_status} label={`${p.stock_display}`} /> : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
+                      {p.is_local_purchase ? (
+                        <span className="text-[10px] font-bold text-[#10B981]">On-demand</span>
+                      ) : p.stock_status ? (
+                        <StockDot s={p.stock_status} label={`${p.stock_display}`} />
+                      ) : isOut(p) && <span className="text-xs font-bold text-[#F87171]">Out</span>}
                     </div>
                   </div>
                 </div>
@@ -613,7 +743,7 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
       )}
 
       {/* Portaled Mobile/Tablet Floating Action Buttons (above bottom navbar on iOS Safari; hidden while modals/sheets are open) */}
-      {!showCart && !showQuickMenu && !picker && typeof document !== 'undefined' && createPortal(
+      {!showCart && !showQuickMenu && !picker && !localModal && typeof document !== 'undefined' && createPortal(
         <>
           {/* MOBILE-ONLY Floating Quick Products / Categories Menu Button */}
           <button
@@ -665,12 +795,12 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
             )}
           >
             <span>⭐ Favorites</span>
-            <span className="text-xs opacity-80">{products.filter((p) => p.favourite).length} items</span>
+            <span className="text-xs opacity-80">{visibleProducts.filter((p) => p.favourite).length} items</span>
           </button>
 
           {categories.map((c: any) => {
             const cname = String(c.name || '').toLowerCase();
-            const catProds = products.filter((p) => p.category_id === c.id);
+            const catProds = visibleProducts.filter((p) => p.category_id === c.id);
             const icon = cname === 'alcohol' ? '🥃' : cname.includes('mocktail') ? '🍹' : cname.includes('soft') ? '🥤' : cname === 'food' ? '🍽' : cname === 'cigarettes' ? '🚬' : '🧊';
             let subs: string[] = [];
             if (cname === 'alcohol') {
@@ -738,6 +868,73 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
 
       <Modal open={!!picker} onClose={() => setPicker(null)} title={picker?.name || ''}>
         {picker && <ServePicker p={picker} canIssueBottle={staff} onPick={(s, ml) => add(picker, s, ml)} money={money} />}
+      </Modal>
+
+      <Modal open={!!localModal} onClose={() => setLocalModal(null)} title={localModal ? `Local Purchase · ${localModal.p.name}` : 'Local Purchase'}>
+        {localModal && (() => {
+          const margin = Number(localModal.p.local_margin_pct ?? 10);
+          const qty = Math.max(0, Math.floor(Number(localModal.qty) || 0));
+          const cost = Math.max(0, Number(localModal.cost) || 0);
+          const unitSell = Math.round(cost * (1 + margin / 100) * 100) / 100;
+          const totalCost = Math.round(cost * qty * 100) / 100;
+          const totalSell = Math.round(unitSell * qty * 100) / 100;
+          const profit = Math.round((totalSell - totalCost) * 100) / 100;
+          return (
+            <form onSubmit={addLocalMisc} className="space-y-4">
+              <p className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+                Locally purchased on demand (not deducted from bar inventory). Customer bill shows only product name, quantity, and final selling price.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={`Quantity (${localModal.p.unit || 'unit'})`}>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={localModal.qty}
+                    onChange={(e) => setLocalModal({ ...localModal, qty: e.target.value })}
+                    required
+                  />
+                </Field>
+                <Field label="Purchase Cost / Unit (₹)">
+                  <Input
+                    type="number"
+                    min={0.01}
+                    step="0.01"
+                    placeholder="e.g. 50"
+                    value={localModal.cost}
+                    onChange={(e) => setLocalModal({ ...localModal, cost: e.target.value })}
+                    autoFocus
+                    required
+                  />
+                </Field>
+              </div>
+              <div className="space-y-1.5 rounded-2xl bg-[#F4F7FE] p-3.5 text-sm dark:bg-[#252D3D]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#707EAE] dark:text-[#94A3B8]">Product</span>
+                  <span className="font-extrabold text-[#1B2559] dark:text-[#E6EDF3]">{localModal.p.name} × {qty}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#707EAE] dark:text-[#94A3B8]">Purchase Cost</span>
+                  <span className="font-bold">{money(cost)} / unit ({money(totalCost)} total)</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#707EAE] dark:text-[#94A3B8]">Auto Selling Price (+{margin}%)</span>
+                  <span className="text-base font-extrabold text-[#422AFB] dark:text-[#818CF8]">
+                    {money(unitSell)} / unit ({money(totalSell)} total)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between border-t border-[#E0E5F2] pt-1.5 dark:border-[#2E384D]">
+                  <span className="text-xs font-bold text-[#707EAE] dark:text-[#94A3B8]">Estimated Profit</span>
+                  <span className="font-extrabold text-emerald-600 dark:text-emerald-400">+{money(profit)}</span>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setLocalModal(null)}>Cancel</Button>
+                <Button disabled={!(qty > 0 && cost > 0)}>Add to Order · {money(totalSell)}</Button>
+              </div>
+            </form>
+          );
+        })()}
       </Modal>
     </div>
   );

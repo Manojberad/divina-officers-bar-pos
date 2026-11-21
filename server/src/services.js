@@ -32,6 +32,12 @@ export const PRODUCT_SELECT = `SELECT p.*, c.name category, c.low_threshold cat_
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
+export function getMiscMarginPct() {
+  const c = q.get("SELECT profit_margin FROM categories WHERE name IN ('Miscellaneous','Misc') ORDER BY id LIMIT 1");
+  const m = c?.profit_margin;
+  return m != null && !isNaN(Number(m)) ? Math.max(0, Number(m)) : 10;
+}
+
 export function getRecipe(productId) {
   return q.all(
     `SELECT r.id, r.product_id, r.ingredient_id, r.qty, r.display_qty, r.display_unit,
@@ -76,6 +82,29 @@ export function computeRecipeMetrics(productId) {
 export function decorate(p) {
   if (!p) return p;
   const { low, crit } = thresholds(p);
+  if (p.is_local_purchase) {
+    return {
+      ...p,
+      is_peg: false,
+      is_recipe: false,
+      party_only: !!p.party_only,
+      is_local_purchase: true,
+      local_margin_pct: getMiscMarginPct(),
+      favourite: !!p.favourite,
+      active: !!p.active,
+      sub_category: p.sub_category || null,
+      recipe: [],
+      recipe_cost: null,
+      stock_display: 0,
+      stock_unit: p.unit || 'unit',
+      full_bottles: 0,
+      loose_pegs_30ml: 0,
+      low_level: low,
+      critical_level: crit,
+      stock_status: 'healthy',
+      stock_value: 0,
+    };
+  }
   if (p.is_recipe) {
     const m = computeRecipeMetrics(p.id);
     const st = m.max_makeable <= 0 ? 'out' : m.max_makeable <= crit ? 'critical' : m.max_makeable <= low ? 'low' : 'healthy';
@@ -83,6 +112,8 @@ export function decorate(p) {
       ...p,
       is_peg: false,
       is_recipe: true,
+      party_only: !!p.party_only,
+      is_local_purchase: false,
       favourite: !!p.favourite,
       active: !!p.active,
       sub_category: p.sub_category || null,
@@ -106,6 +137,8 @@ export function decorate(p) {
     ...p,
     is_peg: !!p.is_peg,
     is_recipe: false,
+    party_only: !!p.party_only,
+    is_local_purchase: false,
     favourite: !!p.favourite,
     active: !!p.active,
     sub_category: p.sub_category || null,
@@ -146,9 +179,43 @@ export function moveStock({ productId, type, qty, unitCost = null, supplier = nu
 export const FLOW = ['draft', 'placed', 'accepted', 'preparing', 'served', 'closed'];
 const ALLOWED_PEGS = [30, 60];
 
-export function priceItem(p, item, _settings, isStaff) {
+export function priceItem(p, item, _settings, isStaff, isParty = false) {
   const qty = Number(item.qty);
   if (!(qty > 0)) throw new HttpError(400, 'Quantity must be positive');
+
+  // Backend enforcement: Party-Use-Only variants cannot be ordered in regular individual orders
+  if (p.party_only && (!isParty || !isStaff)) {
+    throw new HttpError(403, `${p.name} is restricted to Party Orders only and cannot be ordered in regular individual orders`);
+  }
+
+  // Locally purchased Miscellaneous items: bartender enters purchase cost at order time; selling price = cost × (1 + margin/100)
+  if (p.is_local_purchase) {
+    if (!isStaff) throw new HttpError(403, `${p.name} is a locally purchased item and must be ordered by the bartender`);
+    if (!Number.isInteger(qty)) throw new HttpError(400, `Whole quantity required for ${p.name}`);
+    const purchaseCost = Number(item.purchase_cost);
+    if (!(purchaseCost > 0)) throw new HttpError(400, `Enter a valid purchase cost (₹) for ${p.name}`);
+    const marginPct = getMiscMarginPct();
+    const unitPrice = round2(purchaseCost * (1 + marginPct / 100));
+    return {
+      product_id: p.id,
+      name: p.name,
+      serve_type: 'unit',
+      peg_ml: null,
+      qty,
+      unit_price: unitPrice,
+      line_total: round2(unitPrice * qty),
+      base_qty: qty,
+      purchase_cost: round2(purchaseCost),
+      margin_pct: marginPct,
+      is_local_purchase: true,
+    };
+  }
+
+  // Packaged non-peg items (bottles, cans, limes, etc.) must be ordered in whole units (no partial splitting)
+  if (!p.is_peg && !Number.isInteger(qty)) {
+    throw new HttpError(400, `Whole quantity required for ${p.name} (partial ${p.unit || 'unit'} splitting is not allowed)`);
+  }
+
   let serve = item.serve_type || (p.is_peg ? (isStaff ? 'bottle' : 'peg') : 'unit');
   let pegMl = null, unitPrice, base;
   if (serve === 'peg') {
@@ -168,7 +235,7 @@ export function priceItem(p, item, _settings, isStaff) {
     base = p.is_peg ? qty * p.size_ml : qty;
   }
   if (isStaff && item.unit_price != null && item.unit_price !== '' && Number(item.unit_price) >= 0) unitPrice = Number(item.unit_price);
-  return { product_id: p.id, name: p.name, serve_type: serve, peg_ml: pegMl, qty, unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100, base_qty: base };
+  return { product_id: p.id, name: p.name, serve_type: serve, peg_ml: pegMl, qty, unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100, base_qty: base, purchase_cost: null };
 }
 
 export function loadOrder(id) {
@@ -248,6 +315,11 @@ export function createOrder(body, user) {
   const normPay = body.payment_mode ? String(body.payment_mode).toLowerCase() : null;
   if (normPay && !['cash', 'upi'].includes(normPay)) throw new HttpError(400, 'Payment mode must be Cash or UPI');
 
+  const isParty = isStaff && (body.is_party === true || body.is_party === 1 || body.is_party === 'true' || body.is_party === '1');
+  if ((body.is_party === true || body.is_party === 1 || body.is_party === 'true') && !isStaff) {
+    throw new HttpError(403, 'Only Bartender or Admin can place Party Orders');
+  }
+
   // Streamlined single-bartender flow: on-demand orders are auto-accepted & billed immediately
   // (Guest orders without payment_mode are auto-accepted & stock-deducted as 'served' awaiting 1-tap Cash/UPI)
   const autoGuestServed = !isDraft && targetUser?.role === 'guest' && !normPay;
@@ -256,7 +328,7 @@ export function createOrder(body, user) {
   const items = body.items.map((it) => {
     const p = getProduct(Number(it.product_id));
     if (!p || !p.active) throw new HttpError(400, 'Product unavailable');
-    return priceItem(p, it, settings, isStaff);
+    return priceItem(p, it, settings, isStaff, isParty);
   });
 
   // Enforce alcohol order limit (for Guests and/or Members as configured by Admin)
@@ -288,16 +360,16 @@ export function createOrder(body, user) {
     const closedAt = status === 'closed' ? t : null;
     const approvalStatus = status === 'closed' ? (userId ? 'pending' : 'na') : 'na';
     const r = q.run(
-      `INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, type, scheduled_at, status, source, notes, total, payment_mode, payment_ref, closed_at, approval_status, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO orders(order_no, client_uuid, user_id, created_by, table_id, type, scheduled_at, status, source, notes, total, is_party, payment_mode, payment_ref, closed_at, approval_status, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       nextOrderNo(), body.client_uuid || crypto.randomUUID(), userId, user?.id ?? null, tableId,
       type, type === 'prebooked' ? new Date(body.scheduled_at).toISOString() : null, status, body.source || (isStaff ? 'pos' : 'self'),
-      body.notes || null, total, normPay, body.payment_ref ? String(body.payment_ref).trim() : null, closedAt, approvalStatus, t, t,
+      body.notes || null, total, isParty ? 1 : 0, normPay, body.payment_ref ? String(body.payment_ref).trim() : null, closedAt, approvalStatus, t, t,
     );
     const oid = Number(r.lastInsertRowid);
     for (const i of items) {
-      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty) VALUES(?,?,?,?,?,?,?,?,?)`,
-        oid, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty);
+      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        oid, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null);
     }
     const evNote = isDraft ? 'pre-order / draft created' : autoGuestServed ? 'auto-accepted (guest awaiting Cash/UPI)' : 'auto-accepted & billed';
     q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', oid, null, status, user?.id ?? null, evNote, t);
@@ -327,7 +399,7 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
     const newItems = rawItems.map((it) => {
       const p = getProduct(Number(it.product_id));
       if (!p) throw new HttpError(400, 'Product not found');
-      return priceItem(p, it, settings, true);
+      return priceItem(p, it, settings, true, !!o.is_party);
     });
 
     const t = now();
@@ -368,16 +440,18 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
           );
         }
       }
-      // Refresh ingredient-level recipe accountability records atomically
+      // Refresh ingredient-level recipe & local-purchase misc accountability records atomically
       q.run('DELETE FROM recipe_consumptions WHERE order_id=?', o.id);
       recordRecipeConsumptions(o.id, newExpanded.consumptions, t);
+      q.run('DELETE FROM misc_transactions WHERE order_id=?', o.id);
+      recordMiscTransactions(o.id, newExpanded.miscEntries, user.id, t);
     }
 
     const total = Math.round(newItems.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
     q.run('DELETE FROM order_items WHERE order_id=?', o.id);
     for (const i of newItems) {
-      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty) VALUES(?,?,?,?,?,?,?,?,?)`,
-        o.id, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty);
+      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        o.id, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null);
     }
     const nextNotes = notes !== undefined ? (notes || null) : o.notes;
     const nextApproval = o.status === 'closed' && o.user_id ? 'pending' : o.approval_status;
@@ -414,10 +488,30 @@ export function expandStockRequirements(items) {
     return prodCache.get(pid);
   };
 
+  const miscEntries = [];
+  const miscMargin = getMiscMarginPct();
   for (const i of items) {
     const p = loadProd(Number(i.product_id));
     if (!p) throw new HttpError(400, 'Product not found');
-    if (p.is_recipe) {
+    if (p.is_local_purchase) {
+      // Locally purchased Miscellaneous items are NOT deducted from stocked inventory;
+      // record purchase cost, selling value & profit separately.
+      const unitPurchaseCost = round2(Number(i.purchase_cost) || 0);
+      const totalPurchaseCost = round2(unitPurchaseCost * Number(i.qty));
+      const totalSelling = round2(Number(i.line_total) || round2(Number(i.unit_price) * Number(i.qty)));
+      const profit = round2(totalSelling - totalPurchaseCost);
+      miscEntries.push({
+        product_id: p.id,
+        product_name: p.name,
+        qty: Number(i.qty),
+        unit_purchase_cost: unitPurchaseCost,
+        total_purchase_cost: totalPurchaseCost,
+        margin_pct: i.margin_pct != null ? Number(i.margin_pct) : miscMargin,
+        unit_selling_price: round2(Number(i.unit_price)),
+        total_selling_value: totalSelling,
+        profit,
+      });
+    } else if (p.is_recipe) {
       recipeQtyByProd.set(p.id, (recipeQtyByProd.get(p.id) || 0) + Number(i.qty));
     } else {
       addStockNeed(p.id, Number(i.base_qty), null, null);
@@ -455,7 +549,7 @@ export function expandStockRequirements(items) {
     for (const e of lineEntries) consumptions.push({ ...e, total_recipe_cost: totalRecipeCost });
   }
 
-  return { stockByProduct, consumptions };
+  return { stockByProduct, consumptions, miscEntries };
 }
 
 function validateStockRequirements(stockByProduct, allowNeg) {
@@ -486,10 +580,23 @@ function recordRecipeConsumptions(orderId, consumptions, atIso) {
   }
 }
 
+function recordMiscTransactions(orderId, miscEntries, userId, atIso) {
+  for (const m of miscEntries) {
+    q.run(
+      `INSERT INTO misc_transactions(
+         order_id, product_id, product_name, qty, unit_purchase_cost, total_purchase_cost,
+         margin_pct, unit_selling_price, total_selling_value, profit, reversed, user_id, at
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+      orderId, m.product_id, m.product_name, m.qty, m.unit_purchase_cost, m.total_purchase_cost,
+      m.margin_pct, m.unit_selling_price, m.total_selling_value, m.profit, userId ?? null, atIso,
+    );
+  }
+}
+
 function deduct(order, userId) {
   const live = q.get('SELECT stock_deducted FROM orders WHERE id=?', order.id);
   if (order.stock_deducted || live?.stock_deducted) return; // strict idempotent guard
-  const { stockByProduct, consumptions } = expandStockRequirements(order.items);
+  const { stockByProduct, consumptions, miscEntries } = expandStockRequirements(order.items);
   validateStockRequirements(stockByProduct, getSettings().allow_negative_stock === '1');
   const t = now();
   for (const [productId, req] of stockByProduct.entries()) {
@@ -498,21 +605,24 @@ function deduct(order, userId) {
     moveStock({ productId, type: 'sale', qty: -req.qty, unitCost: baseCost(p), orderId: order.id, userId, note, at: t });
   }
   recordRecipeConsumptions(order.id, consumptions, t);
+  recordMiscTransactions(order.id, miscEntries, userId, t);
   q.run('UPDATE orders SET stock_deducted=1 WHERE id=?', order.id);
 }
 
 function reverse(order, userId) {
   const live = q.get('SELECT stock_deducted FROM orders WHERE id=?', order.id);
   if (!order.stock_deducted && !live?.stock_deducted) return;
-  if (q.get("SELECT 1 FROM stock_movements WHERE order_id=? AND type='sale_reversal' LIMIT 1", order.id)) return; // prevent duplicate restoration
-  const deducted = q.all(
-    "SELECT product_id, SUM(ABS(qty)) qty, MAX(unit_cost) unit_cost FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id",
-    order.id,
-  );
-  for (const row of deducted) {
-    moveStock({ productId: row.product_id, type: 'sale_reversal', qty: row.qty, unitCost: row.unit_cost, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
+  if (!q.get("SELECT 1 FROM stock_movements WHERE order_id=? AND type='sale_reversal' LIMIT 1", order.id)) {
+    const deducted = q.all(
+      "SELECT product_id, SUM(ABS(qty)) qty, MAX(unit_cost) unit_cost FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id",
+      order.id,
+    );
+    for (const row of deducted) {
+      moveStock({ productId: row.product_id, type: 'sale_reversal', qty: row.qty, unitCost: row.unit_cost, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
+    }
   }
   q.run('UPDATE recipe_consumptions SET reversed=1 WHERE order_id=?', order.id);
+  q.run('UPDATE misc_transactions SET reversed=1 WHERE order_id=?', order.id);
   q.run('UPDATE orders SET stock_deducted=0 WHERE id=?', order.id);
 }
 

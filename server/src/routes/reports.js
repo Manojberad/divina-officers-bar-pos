@@ -56,7 +56,7 @@ export const REPORTS = {
   inventory: {
     title: 'Inventory Report (Opening / Closing Stock)',
     build: (F, T) => {
-      const prods = q.all(`${PRODUCT_SELECT} WHERE p.is_recipe=0 ORDER BY c.sort, p.name`);
+      const prods = q.all(`${PRODUCT_SELECT} WHERE p.is_recipe=0 AND p.is_local_purchase=0 ORDER BY c.sort, p.name`);
       const mv = (pid, from, to) => q.all('SELECT type, SUM(qty) qty FROM stock_movements WHERE product_id=? AND at>=? AND (? IS NULL OR at<?) GROUP BY type', pid, from, to, to);
       return {
         columns: [C('name', 'Product'), C('category', 'Category'), C('unit', 'Unit'), C('opening', 'Opening', 'num'), C('purchased', 'Purchased', 'num'), C('sold', 'Sold', 'num'),
@@ -175,6 +175,142 @@ export const REPORTS = {
         total_recipe_cost: round(x.total_recipe_cost),
       })),
       sum: ['ingredient_cost'],
+    }),
+  },
+  packaged_beverages: {
+    title: 'Packaged Beverages (Coke, Sprite & Tonic Water)',
+    build: (F, T) => {
+      const bevProds = q.all(
+        `${PRODUCT_SELECT}
+         WHERE p.is_recipe=0 AND p.is_local_purchase=0
+           AND (lower(p.name) LIKE '%coca-cola%' OR lower(p.name) LIKE '%coke%' OR lower(p.name) LIKE '%sprite%' OR lower(p.name) LIKE '%tonic water%')
+         ORDER BY p.brand, p.size_ml, p.name`,
+      );
+      const rows = bevProds.map((p) => {
+        const sales = q.get(
+          `SELECT COALESCE(SUM(CASE WHEN COALESCE(o.is_party,0)=0 THEN i.qty ELSE 0 END), 0) regular_qty,
+                  COALESCE(SUM(CASE WHEN COALESCE(o.is_party,0)=1 THEN i.qty ELSE 0 END), 0) party_qty,
+                  COALESCE(SUM(i.qty), 0) total_qty,
+                  COALESCE(SUM(i.line_total), 0) revenue
+           FROM order_items i JOIN orders o ON o.id=i.order_id
+           WHERE i.product_id=? AND o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<?`,
+          p.id, F, T,
+        );
+        const mv = q.get(
+          `SELECT COALESCE(-SUM(qty), 0) deducted FROM stock_movements
+           WHERE product_id=? AND type IN ('sale','sale_reversal') AND at>=? AND at<?`,
+          p.id, F, T,
+        );
+        const totalQty = round(sales?.total_qty || 0, 2);
+        const revenue = round(sales?.revenue || 0);
+        const purchaseCost = round(totalQty * (p.purchase_price || 0));
+        const variant = `${p.size_ml ? `${p.size_ml} ml ` : ''}${p.unit || 'unit'}${p.party_only ? ' (Party Only)' : ''}`;
+        return {
+          _id: p.id,
+          name: p.name,
+          variant,
+          regular_qty: round(sales?.regular_qty || 0, 2),
+          party_qty: round(sales?.party_qty || 0, 2),
+          total_qty: totalQty,
+          stock_deducted: round(mv?.deducted || 0, 2),
+          current_stock: round(p.stock || 0, 2),
+          purchase_cost: purchaseCost,
+          revenue,
+          profit: round(revenue - purchaseCost),
+        };
+      });
+      return {
+        columns: [
+          C('name', 'Beverage'),
+          C('variant', 'Packaging / Rule'),
+          C('regular_qty', 'Regular Sold', 'num'),
+          C('party_qty', 'Party Sold', 'num'),
+          C('total_qty', 'Total Sold', 'num'),
+          C('stock_deducted', 'Stock Deducted', 'num'),
+          C('current_stock', 'Remaining', 'num'),
+          C('purchase_cost', 'Cost', 'money'),
+          C('revenue', 'Total Sales', 'money'),
+          C('profit', 'Profit', 'money'),
+        ],
+        rows,
+        sum: ['regular_qty', 'party_qty', 'total_qty', 'stock_deducted', 'purchase_cost', 'revenue', 'profit'],
+      };
+    },
+  },
+  misc_local: {
+    title: 'Miscellaneous Local Purchases & Profit',
+    build: (F, T) => ({
+      columns: [
+        C('product_name', 'Product Name'),
+        C('orders', 'Orders', 'int'),
+        C('qty_sold', 'Qty Sold', 'num'),
+        C('total_purchase_cost', 'Total Purchase Cost', 'money'),
+        C('total_selling_value', 'Total Selling Value', 'money'),
+        C('profit', 'Profit Earned', 'money'),
+      ],
+      rows: q.all(
+        `SELECT mt.product_id _id, mt.product_name, COUNT(DISTINCT mt.order_id) orders,
+                SUM(mt.qty) qty_sold, SUM(mt.total_purchase_cost) total_purchase_cost,
+                SUM(mt.total_selling_value) total_selling_value, SUM(mt.profit) profit
+         FROM misc_transactions mt
+         JOIN orders o ON o.id = mt.order_id
+         WHERE mt.reversed = 0 AND o.status IN ${SOLD} AND mt.at >= ? AND mt.at < ?
+         GROUP BY mt.product_id, mt.product_name
+         ORDER BY total_selling_value DESC`,
+        F, T,
+      ).map((x) => ({
+        _id: x._id,
+        product_name: x.product_name,
+        orders: x.orders,
+        qty_sold: round(x.qty_sold, 2),
+        total_purchase_cost: round(x.total_purchase_cost),
+        total_selling_value: round(x.total_selling_value),
+        profit: round(x.profit),
+      })),
+      sum: ['orders', 'qty_sold', 'total_purchase_cost', 'total_selling_value', 'profit'],
+    }),
+  },
+  misc_local_ledger: {
+    title: 'Miscellaneous Local Purchase Order Log',
+    build: (F, T) => ({
+      columns: [
+        C('order_no', 'Order ID'),
+        C('at', 'Date'),
+        C('product_name', 'Product'),
+        C('qty', 'Qty', 'num'),
+        C('unit_purchase_cost', 'Unit Cost', 'money'),
+        C('total_purchase_cost', 'Total Cost', 'money'),
+        C('margin_pct', 'Margin %', 'num'),
+        C('unit_selling_price', 'Unit Price', 'money'),
+        C('total_selling_value', 'Total Sales', 'money'),
+        C('profit', 'Profit', 'money'),
+        C('by_name', 'Bartender'),
+      ],
+      rows: q.all(
+        `SELECT mt.id _id, o.order_no, mt.at, mt.product_name, mt.qty, mt.unit_purchase_cost,
+                mt.total_purchase_cost, mt.margin_pct, mt.unit_selling_price, mt.total_selling_value,
+                mt.profit, u.name by_name
+         FROM misc_transactions mt
+         JOIN orders o ON o.id = mt.order_id
+         LEFT JOIN users u ON u.id = mt.user_id
+         WHERE mt.reversed = 0 AND o.status IN ${SOLD} AND mt.at >= ? AND mt.at < ?
+         ORDER BY mt.id DESC`,
+        F, T,
+      ).map((x) => ({
+        _id: x._id,
+        order_no: x.order_no,
+        at: local(x.at),
+        product_name: x.product_name,
+        qty: round(x.qty, 2),
+        unit_purchase_cost: round(x.unit_purchase_cost),
+        total_purchase_cost: round(x.total_purchase_cost),
+        margin_pct: round(x.margin_pct, 2),
+        unit_selling_price: round(x.unit_selling_price),
+        total_selling_value: round(x.total_selling_value),
+        profit: round(x.profit),
+        by_name: x.by_name || '—',
+      })),
+      sum: ['qty', 'total_purchase_cost', 'total_selling_value', 'profit'],
     }),
   },
 };
