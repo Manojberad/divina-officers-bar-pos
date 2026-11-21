@@ -17,6 +17,7 @@ r.post('/movement', staff, (req, res) => {
   const { product_id, type, qty, ml, unit_cost, supplier, invoice, note } = req.body;
   const p = getProduct(Number(product_id));
   if (!p) throw new HttpError(404, 'Product not found');
+  if (p.is_recipe) throw new HttpError(400, `Stock for recipe product ${p.name} is managed automatically via its ingredients`);
   if (!['purchase', 'wastage', 'complimentary', 'adjustment', 'removal'].includes(type)) throw new HttpError(400, 'Invalid movement type');
   if (req.user.role === 'bartender' && !['wastage', 'complimentary'].includes(type)) throw new HttpError(403, 'Bartenders may record wastage/complimentary only');
   // Quantity in bottles/units, or ml for peg products
@@ -53,6 +54,7 @@ r.post('/reconcile', admin, (req, res) => {
   const out = tx(() => items.filter((i) => i.physical_qty !== '' && i.physical_qty != null).map((i) => {
     const p = getProduct(Number(i.product_id));
     if (!p) throw new HttpError(404, 'Product not found');
+    if (p.is_recipe) throw new HttpError(400, `Cannot reconcile recipe product ${p.name} directly — reconcile its ingredients instead`);
     const sys = displayQty(p);
     const phys = Number(i.physical_qty);
     const diff = Math.round((phys - sys) * 1000) / 1000;

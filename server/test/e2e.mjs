@@ -285,12 +285,154 @@ assert.equal(rec.data[0].diff, -0.5);
 const alerts = (await req('/api/inventory/alerts', { token: btTok })).data;
 assert(alerts.length > 0 && alerts.some((a) => a.stock_status === 'out'), 'Color-coded stock alerts returned');
 
-console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 11 Reports (JSON + XLSX + PDF)…');
+console.log('6b. Recipe-based Mocktails (Blue Lagoon & Mint Mojito): dynamic cost, atomic deduction, rollback, idempotency, edit, cancel & reporting…');
+const mockCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Mocktails').id;
+const softCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Soft Drinks').id;
+const miscCatId = (await req('/api/categories', { token: adminTok })).data.find((c) => c.name === 'Misc').id;
+
+const mkProd = async (body) => (await req('/api/products', { method: 'POST', token: adminTok, body })).data;
+const blueCuracao = await mkProd({ name: 'BLUE CURACAO', category_id: softCatId, sub_category: 'Soda', unit: 'loose', is_peg: false, purchase_price: 11.2, selling_price: 12.32, opening_stock: 42 });
+const mintSyrup = await mkProd({ name: 'MINT SYRUP', category_id: softCatId, sub_category: 'Soda', unit: 'loose', is_peg: false, purchase_price: 11.96, selling_price: 13.16, opening_stock: 63 });
+const soft250 = await mkProd({ name: 'SOFT 250 ML', category_id: softCatId, sub_category: 'Soda', unit: 'bottle', is_peg: false, purchase_price: 18, selling_price: 19.8, opening_stock: 57 });
+const soda300 = await mkProd({ name: 'SODA 300 ML', category_id: softCatId, sub_category: 'Soda', unit: 'bottle', is_peg: false, purchase_price: 9.15, selling_price: 10.07, opening_stock: 56 });
+const freshLime = await mkProd({ name: 'FRESH LIME', category_id: miscCatId, unit: 'each', is_peg: false, purchase_price: 15.5, selling_price: 15.5, opening_stock: 20 });
+
+const blueLagoon = await mkProd({ name: 'BLUE LAGOON', category_id: mockCatId, unit: 'glass', is_peg: false, is_recipe: true, selling_price: 69.37 });
+const mintMojito = await mkProd({ name: 'MINT MOJITO', category_id: mockCatId, unit: 'glass', is_peg: false, is_recipe: true, selling_price: 76.39 });
+
+const blRecRes = await req(`/api/products/${blueLagoon.id}/recipe`, {
+  method: 'PUT', token: adminTok,
+  body: {
+    ingredients: [
+      { ingredient_id: blueCuracao.id, qty: 2, display_qty: 60, display_unit: 'ml' },
+      { ingredient_id: soft250.id, qty: 1, display_qty: 250, display_unit: 'ml' },
+      { ingredient_id: soda300.id, qty: 1, display_qty: 250, display_unit: 'ml' },
+      { ingredient_id: freshLime.id, qty: 1, display_qty: 1, display_unit: 'piece' },
+    ],
+  },
+});
+assert.equal(blRecRes.status, 200);
+assert.equal(blRecRes.data.recipe_cost, 65.05, 'Blue Lagoon dynamic recipe cost = 22.40 + 18 + 9.15 + 15.50');
+assert.equal(blRecRes.data.stock_display, 20, 'Blue Lagoon makeable qty limited by 20 limes');
+
+const mmRecRes = await req(`/api/products/${mintMojito.id}/recipe`, {
+  method: 'PUT', token: adminTok,
+  body: {
+    ingredients: [
+      { ingredient_id: mintSyrup.id, qty: 2, display_qty: 60, display_unit: 'ml' },
+      { ingredient_id: soft250.id, qty: 1, display_qty: 250, display_unit: 'ml' },
+      { ingredient_id: soda300.id, qty: 1, display_qty: 250, display_unit: 'ml' },
+      { ingredient_id: freshLime.id, qty: 1, display_qty: 1, display_unit: 'piece' },
+    ],
+  },
+});
+assert.equal(mmRecRes.status, 200);
+assert.equal(mmRecRes.data.recipe_cost, 66.57, 'Mint Mojito dynamic recipe cost = 23.92 + 18 + 9.15 + 15.50');
+
+// Customer/public POS view sees finished mocktails & selling prices only (no recipe internals)
+const pubProds = (await req('/api/products', { token: memTok })).data;
+const pubBL = pubProds.find((x) => x.id === blueLagoon.id);
+assert.equal(pubBL.selling_price, 69.37);
+assert.equal(pubBL.available, true);
+assert.equal(pubBL.recipe, undefined, 'Public POS hides recipe internals');
+
+// Dynamic cost updates when ingredient purchase price changes, while selling price stays independent
+await req(`/api/products/${freshLime.id}`, { method: 'PUT', token: adminTok, body: { purchase_price: 13 } });
+const blAfterPrice = (await req(`/api/products/${blueLagoon.id}`, { token: adminTok })).data;
+assert.equal(blAfterPrice.recipe_cost, 62.55, 'Blue Lagoon recipe cost updated dynamically when Lime price changed to ₹13');
+assert.equal(blAfterPrice.selling_price, 69.37, 'Mocktail selling price remains independent of ingredient cost');
+// Restore Lime price to 15.50
+await req(`/api/products/${freshLime.id}`, { method: 'PUT', token: adminTok, body: { purchase_price: 15.5 } });
+
+// Proportional deduction: 3 Blue Lagoons -> 6 loose (180ml) Blue Curacao, 3 Soft, 3 Soda, 3 Limes
+const stockOf = (id) => q.get('SELECT stock FROM products WHERE id=?', id).stock;
+const blUuid = 'recipe-test-bl-3-uuid';
+const blOrd = await req('/api/orders', { method: 'POST', token: memTok, body: { client_uuid: blUuid, items: [{ product_id: blueLagoon.id, qty: 3 }] } });
+assert.equal(blOrd.status, 201);
+assert.equal(blOrd.data.total, 208.11, '3 x 69.37 = 208.11');
+assert.equal(stockOf(blueCuracao.id), 36, 'Blue Curacao: 42 - 6 loose (180ml) = 36');
+assert.equal(stockOf(soft250.id), 54, 'Soft 250ml: 57 - 3 = 54');
+assert.equal(stockOf(soda300.id), 53, 'Soda 300ml: 56 - 3 = 53');
+assert.equal(stockOf(freshLime.id), 17, 'Fresh Lime: 20 - 3 = 17');
+
+// Idempotency: duplicate client_uuid retry must NOT double-deduct
+const blRetry = await req('/api/orders', { method: 'POST', token: memTok, body: { client_uuid: blUuid, items: [{ product_id: blueLagoon.id, qty: 3 }] } });
+assert.equal(blRetry.status, 200);
+assert.equal(stockOf(blueCuracao.id), 36, 'Retry did not double-deduct Blue Curacao');
+assert.equal(stockOf(freshLime.id), 17, 'Retry did not double-deduct Fresh Lime');
+
+// Bartender edits 3 Blue Lagoons -> 2 Blue Lagoons (restores exactly 1 drink's ingredients atomically)
+const blEdit = await req(`/api/orders/${blOrd.data.id}/items`, { method: 'PUT', token: btTok, body: { items: [{ product_id: blueLagoon.id, qty: 2 }], reason: 'Reduced qty' } });
+assert.equal(blEdit.status, 200);
+assert.equal(stockOf(blueCuracao.id), 38, 'Edit restored 2 loose (60ml) Blue Curacao');
+assert.equal(stockOf(soft250.id), 55);
+assert.equal(stockOf(soda300.id), 54);
+assert.equal(stockOf(freshLime.id), 18);
+
+// Cancel Blue Lagoon order -> restores exact remaining 2 drinks' ingredients ONCE (no duplicate restore)
+const blCancel = await req(`/api/orders/${blOrd.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled', note: 'Test cancel' } });
+assert.equal(blCancel.status, 200);
+assert.equal(stockOf(blueCuracao.id), 42, 'Cancel restored full Blue Curacao stock');
+assert.equal(stockOf(soft250.id), 57, 'Cancel restored full Soft 250ml stock');
+assert.equal(stockOf(soda300.id), 56, 'Cancel restored full Soda 300ml stock');
+assert.equal(stockOf(freshLime.id), 20, 'Cancel restored full Fresh Lime stock');
+const blCancel2 = await req(`/api/orders/${blOrd.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled' } });
+assert([200, 409].includes(blCancel2.status), 'Second cancel is idempotent / blocked');
+assert.equal(stockOf(blueCuracao.id), 42, 'No duplicate restoration for Blue Curacao');
+assert.equal(stockOf(soft250.id), 57, 'No duplicate restoration for Soft 250ml');
+assert.equal(stockOf(soda300.id), 56, 'No duplicate restoration for Soda 300ml');
+assert.equal(stockOf(freshLime.id), 20, 'No duplicate restoration for Fresh Lime');
+assert.equal(q.get("SELECT COUNT(*) n FROM stock_movements WHERE order_id=? AND type='sale_reversal'", blOrd.data.id).n, 4, 'Exactly 4 reversal rows recorded once');
+
+// Order 5 Blue Lagoons + 2 Mint Mojitos (checks both recipes + combined consumption reporting)
+const bl5 = await req('/api/orders', { method: 'POST', token: memTok, body: { items: [{ product_id: blueLagoon.id, qty: 5 }] } });
+assert.equal(bl5.status, 201);
+const mm2 = await req('/api/orders', { method: 'POST', token: guestTok, body: { table_code: tables[0].code, items: [{ product_id: mintMojito.id, qty: 2 }] } });
+assert.equal(mm2.status, 201);
+assert.equal(mm2.data.status, 'served', 'Guest mocktail order auto-accepted & deducted awaiting Cash/UPI');
+assert.equal(stockOf(blueCuracao.id), 32, '5 Blue Lagoons deducted 10 loose (300ml) Blue Curacao');
+assert.equal(stockOf(mintSyrup.id), 59, '2 Mint Mojitos deducted 4 loose (120ml) Mint Syrup');
+assert.equal(stockOf(soft250.id), 50, '5 + 2 mocktails deducted 7 Soft 250ml (1750ml)');
+assert.equal(stockOf(soda300.id), 49, '5 + 2 mocktails deducted 7 Soda 300ml (1750ml)');
+assert.equal(stockOf(freshLime.id), 13, '5 + 2 mocktails deducted 7 Fresh Limes');
+
+// Guest payment status transition (served -> closed via UPI) must NOT double-deduct ingredients
+const mmPay = await req(`/api/orders/${mm2.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'closed', payment_mode: 'upi', payment_ref: 'UPI-MOCK-1' } });
+assert.equal(mmPay.status, 200);
+assert.equal(stockOf(mintSyrup.id), 59, 'Payment settlement did not double-deduct Mint Syrup');
+assert.equal(stockOf(freshLime.id), 13, 'Payment settlement did not double-deduct Fresh Lime');
+
+// Stock validation & atomic rollback: combined order needing 14 Limes when only 13 left must FAIL cleanly with 0 partial deductions
+const overLimit = await req('/api/orders', {
+  method: 'POST', token: memTok,
+  body: { items: [{ product_id: blueLagoon.id, qty: 8 }, { product_id: mintMojito.id, qty: 6 }] },
+});
+assert.equal(overLimit.status, 409, 'Insufficient shared ingredient blocks order');
+assert(/FRESH LIME/i.test(overLimit.data.error), `Error names unavailable ingredient (got: ${overLimit.data.error})`);
+assert.equal(stockOf(blueCuracao.id), 32, 'Rollback preserved Blue Curacao');
+assert.equal(stockOf(mintSyrup.id), 59, 'Rollback preserved Mint Syrup');
+assert.equal(stockOf(soft250.id), 50, 'Rollback preserved Soft 250ml');
+assert.equal(stockOf(soda300.id), 49, 'Rollback preserved Soda 300ml');
+assert.equal(stockOf(freshLime.id), 13, 'Rollback preserved Fresh Lime');
+
+// Verify Sales Report lists BLUE LAGOON (not ingredients) & Recipe Consumption Report records exact 5-Blue-Lagoon consumption
+const prodRep = (await req('/api/reports/product', { token: adminTok })).data;
+assert(prodRep.rows.some((r) => r.name === 'BLUE LAGOON' && r.qty === 5), 'Sales report lists 5 BLUE LAGOON');
+assert(!prodRep.rows.some((r) => r.name === 'BLUE CURACAO'), 'Sales report does not list raw recipe ingredients as sold items');
+const rcRep = (await req('/api/reports/recipe_consumption', { token: adminTok })).data;
+const bl5Rows = rcRep.rows.filter((r) => r.order_no === bl5.data.order_no);
+assert.equal(bl5Rows.length, 4, '4 ingredient rows recorded for 5 Blue Lagoons');
+assert.equal(bl5Rows.find((r) => r.ingredient_name === 'BLUE CURACAO').qty_consumed, 300, '5 Blue Lagoons -> 300 ml Blue Curacao');
+assert.equal(bl5Rows.find((r) => r.ingredient_name === 'SOFT 250 ML').qty_consumed, 1250, '5 Blue Lagoons -> 1250 ml Soft Drink');
+assert.equal(bl5Rows.find((r) => r.ingredient_name === 'SODA 300 ML').qty_consumed, 1250, '5 Blue Lagoons -> 1250 ml Soda');
+assert.equal(bl5Rows.find((r) => r.ingredient_name === 'FRESH LIME').qty_consumed, 5, '5 Blue Lagoons -> 5 piece Lime');
+
+console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 12 Reports (JSON + XLSX + PDF)…');
 const dash = (await req('/api/dashboard', { token: adminTok })).data;
 assert(dash.kpi.orders > 0 && dash.valuation.cost > 0);
 assert(dash.guestPayments.cash.revenue > 0 && dash.guestPayments.upi.revenue > 0, 'Dashboard tracks Guest Cash & UPI revenue');
 const types = (await req('/api/reports/types', { token: adminTok })).data;
-assert.equal(types.length, 11);
+assert.equal(types.length, 12);
 for (const t of types) {
   const j = await req(`/api/reports/${t.key}`, { token: adminTok });
   assert.equal(j.status, 200, `JSON report ${t.key}`);

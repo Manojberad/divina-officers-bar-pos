@@ -30,18 +30,87 @@ export function stockStatus(p) {
 export const PRODUCT_SELECT = `SELECT p.*, c.name category, c.low_threshold cat_low, c.critical_threshold cat_critical
   FROM products p LEFT JOIN categories c ON c.id = p.category_id`;
 
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+export function getRecipe(productId) {
+  return q.all(
+    `SELECT r.id, r.product_id, r.ingredient_id, r.qty, r.display_qty, r.display_unit,
+            p.name ingredient_name, p.unit ingredient_unit, p.is_peg ingredient_is_peg,
+            p.size_ml ingredient_size_ml, p.purchase_price ingredient_purchase_price, p.stock ingredient_stock
+     FROM product_recipes r
+     JOIN products p ON p.id = r.ingredient_id
+     WHERE r.product_id = ?
+     ORDER BY r.id`,
+    productId,
+  );
+}
+
+export function computeRecipeMetrics(productId) {
+  const rows = getRecipe(productId);
+  const ingredients = rows.map((r) => {
+    const unitCost = r.ingredient_is_peg && r.ingredient_size_ml > 0
+      ? r.ingredient_purchase_price / r.ingredient_size_ml
+      : r.ingredient_purchase_price;
+    const lineCost = round2(r.qty * unitCost);
+    const makeable = r.qty > 0 ? Math.floor(Math.max(0, r.ingredient_stock) / r.qty) : 0;
+    return {
+      id: r.id,
+      ingredient_id: r.ingredient_id,
+      ingredient_name: r.ingredient_name,
+      qty: r.qty,
+      display_qty: r.display_qty,
+      display_unit: r.display_unit,
+      ingredient_unit: r.ingredient_is_peg ? 'ml' : r.ingredient_unit || 'unit',
+      ingredient_stock: round2(r.ingredient_stock),
+      unit_cost: Math.round(unitCost * 10000) / 10000,
+      line_cost: lineCost,
+      makeable,
+    };
+  });
+  const recipe_cost = round2(ingredients.reduce((s, i) => s + i.line_cost, 0));
+  const max_makeable = ingredients.length ? Math.min(...ingredients.map((i) => i.makeable)) : 0;
+  const limiting = ingredients.find((i) => i.makeable === max_makeable)?.ingredient_name || null;
+  return { ingredients, recipe_cost, max_makeable, limiting_ingredient: limiting };
+}
+
 export function decorate(p) {
   if (!p) return p;
   const { low, crit } = thresholds(p);
+  if (p.is_recipe) {
+    const m = computeRecipeMetrics(p.id);
+    const st = m.max_makeable <= 0 ? 'out' : m.max_makeable <= crit ? 'critical' : m.max_makeable <= low ? 'low' : 'healthy';
+    return {
+      ...p,
+      is_peg: false,
+      is_recipe: true,
+      favourite: !!p.favourite,
+      active: !!p.active,
+      sub_category: p.sub_category || null,
+      recipe: m.ingredients,
+      recipe_cost: m.recipe_cost,
+      limiting_ingredient: m.limiting_ingredient,
+      stock_display: m.max_makeable,
+      stock_unit: p.unit || 'glass',
+      full_bottles: m.max_makeable,
+      loose_pegs_30ml: 0,
+      low_level: low,
+      critical_level: crit,
+      stock_status: st,
+      stock_value: 0, // Physical stock value is accounted on raw ingredients to prevent double counting
+    };
+  }
   const fullBottles = p.is_peg && p.size_ml > 0 ? Math.floor(Math.max(0, p.stock) / p.size_ml) : Math.floor(Math.max(0, p.stock));
   const looseMl = p.is_peg && p.size_ml > 0 ? Math.round((Math.max(0, p.stock) - fullBottles * p.size_ml) * 100) / 100 : 0;
   const loosePegs = p.is_peg && p.size_ml > 0 ? Math.round((looseMl / 30) * 100) / 100 : 0;
   return {
     ...p,
     is_peg: !!p.is_peg,
+    is_recipe: false,
     favourite: !!p.favourite,
     active: !!p.active,
     sub_category: p.sub_category || null,
+    recipe: [],
+    recipe_cost: null,
     stock_display: Math.round(displayQty(p) * 100) / 100,
     stock_unit: p.is_peg ? 'bottles' : p.unit || 'units',
     full_bottles: fullBottles,
@@ -209,15 +278,9 @@ export function createOrder(body, user) {
       }
     }
   }
-  // Availability check (aggregate per product)
-  const need = {};
-  items.forEach((i) => { need[i.product_id] = (need[i.product_id] || 0) + i.base_qty; });
-  if (settings.allow_negative_stock !== '1') {
-    for (const [pid, n] of Object.entries(need)) {
-      const p = getProduct(Number(pid));
-      if (p.stock < n - 1e-9) throw new HttpError(409, `Insufficient stock for ${p.name}`);
-    }
-  }
+  // Availability check (expands recipe products into exact ingredient requirements & aggregates across entire order)
+  const expanded = expandStockRequirements(items);
+  validateStockRequirements(expanded.stockByProduct, settings.allow_negative_stock === '1');
   const total = Math.round(items.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
 
   const id = tx(() => {
@@ -269,36 +332,45 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
 
     const t = now();
     if (o.stock_deducted) {
-      const oldMap = new Map(aggregateByProduct(o.items));
-      const newMap = new Map(aggregateByProduct(newItems));
+      const oldRows = q.all("SELECT product_id, SUM(ABS(qty)) qty FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id", o.id);
+      const oldMap = new Map(oldRows.map((r) => [Number(r.product_id), Number(r.qty)]));
+      const newExpanded = expandStockRequirements(newItems);
+      const newMap = new Map([...newExpanded.stockByProduct.entries()].map(([pid, info]) => [pid, info.qty]));
       const allPids = new Set([...oldMap.keys(), ...newMap.keys()]);
       const allowNeg = settings.allow_negative_stock === '1';
       for (const pid of allPids) {
         const oldQty = oldMap.get(pid) || 0;
         const newQty = newMap.get(pid) || 0;
         const delta = newQty - oldQty; // positive = deduct more; negative = return stock
+        const p = getProduct(pid);
         if (Math.abs(delta) > 1e-9) {
-          const p = getProduct(pid);
           if (!allowNeg && p.stock - delta < -1e-9) {
-            throw new HttpError(409, `Insufficient stock for ${p.name}`);
+            const info = newExpanded.stockByProduct.get(pid);
+            const srcNote = info?.sources?.size ? ` (required for ${[...info.sources].join(', ')})` : '';
+            throw new HttpError(409, `Insufficient stock for ${p.name}${srcNote}`);
           }
           q.run('UPDATE products SET stock = stock - ? WHERE id=?', delta, pid);
         }
+        const info = newExpanded.stockByProduct.get(pid);
+        const noteStr = info?.notes?.length ? `Order ${o.order_no} (edited; ${info.notes.join('; ')})` : `Order ${o.order_no} (edited)`;
         if (newQty <= 1e-9) {
           q.run("DELETE FROM stock_movements WHERE order_id=? AND product_id=? AND type='sale'", o.id, pid);
         } else if (oldQty <= 1e-9) {
           q.run(
             `INSERT INTO stock_movements(product_id, type, qty, unit_cost, order_id, note, user_id, at)
-             VALUES(?, 'sale', ?, NULL, ?, ?, ?, ?)`,
-            pid, -newQty, o.id, `Order ${o.order_no} (edited)`, user.id, t,
+             VALUES(?, 'sale', ?, ?, ?, ?, ?, ?)`,
+            pid, -newQty, baseCost(p), o.id, noteStr, user.id, t,
           );
         } else {
           q.run(
-            "UPDATE stock_movements SET qty=?, note=?, user_id=?, at=? WHERE order_id=? AND product_id=? AND type='sale'",
-            -newQty, `Order ${o.order_no} (edited)`, user.id, t, o.id, pid,
+            "UPDATE stock_movements SET qty=?, unit_cost=?, note=?, user_id=?, at=? WHERE order_id=? AND product_id=? AND type='sale'",
+            -newQty, baseCost(p), noteStr, user.id, t, o.id, pid,
           );
         }
       }
+      // Refresh ingredient-level recipe accountability records atomically
+      q.run('DELETE FROM recipe_consumptions WHERE order_id=?', o.id);
+      recordRecipeConsumptions(o.id, newExpanded.consumptions, t);
     }
 
     const total = Math.round(newItems.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
@@ -319,27 +391,128 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
   return updated;
 }
 
-function aggregateByProduct(items) {
-  const byProd = new Map();
+/**
+ * Expands an order's line items into:
+ *  - stockByProduct: exact aggregated inventory base-unit deductions (resolving recipe products to their ingredients)
+ *  - consumptions: ingredient-level accountability records for every recipe-based product sold
+ */
+export function expandStockRequirements(items) {
+  const stockByProduct = new Map();
+  const addStockNeed = (pid, qty, note, sourceName) => {
+    const cur = stockByProduct.get(pid) || { qty: 0, notes: [], sources: new Set() };
+    cur.qty += qty;
+    if (note) cur.notes.push(note);
+    if (sourceName) cur.sources.add(sourceName);
+    stockByProduct.set(pid, cur);
+  };
+
+  // Aggregate recipe items by product_id first so duplicate lines in one cart combine cleanly
+  const recipeQtyByProd = new Map();
+  const prodCache = new Map();
+  const loadProd = (pid) => {
+    if (!prodCache.has(pid)) prodCache.set(pid, getProduct(pid));
+    return prodCache.get(pid);
+  };
+
   for (const i of items) {
-    byProd.set(i.product_id, (byProd.get(i.product_id) || 0) + Number(i.base_qty));
+    const p = loadProd(Number(i.product_id));
+    if (!p) throw new HttpError(400, 'Product not found');
+    if (p.is_recipe) {
+      recipeQtyByProd.set(p.id, (recipeQtyByProd.get(p.id) || 0) + Number(i.qty));
+    } else {
+      addStockNeed(p.id, Number(i.base_qty), null, null);
+    }
   }
-  return [...byProd.entries()];
+
+  const consumptions = [];
+  for (const [prodId, qtySold] of recipeQtyByProd.entries()) {
+    const p = loadProd(prodId);
+    const recipe = getRecipe(prodId);
+    if (!recipe.length) throw new HttpError(400, `Recipe for ${p.name} has no ingredients configured`);
+
+    const lineEntries = recipe.map((r) => {
+      const baseConsumed = Math.round(r.qty * qtySold * 10000) / 10000;
+      const dispConsumed = Math.round(r.display_qty * qtySold * 10000) / 10000;
+      const unitCost = r.ingredient_is_peg && r.ingredient_size_ml > 0
+        ? r.ingredient_purchase_price / r.ingredient_size_ml
+        : r.ingredient_purchase_price;
+      const ingredientCost = round2(baseConsumed * unitCost);
+      addStockNeed(r.ingredient_id, baseConsumed, `via ${qtySold} x ${p.name}`, p.name);
+      return {
+        product_id: p.id,
+        product_name: p.name,
+        qty_sold: qtySold,
+        ingredient_id: r.ingredient_id,
+        ingredient_name: r.ingredient_name,
+        base_qty_consumed: baseConsumed,
+        qty_consumed: dispConsumed,
+        unit: r.display_unit,
+        ingredient_unit_cost: Math.round(unitCost * 10000) / 10000,
+        ingredient_cost: ingredientCost,
+      };
+    });
+    const totalRecipeCost = round2(lineEntries.reduce((s, e) => s + e.ingredient_cost, 0));
+    for (const e of lineEntries) consumptions.push({ ...e, total_recipe_cost: totalRecipeCost });
+  }
+
+  return { stockByProduct, consumptions };
+}
+
+function validateStockRequirements(stockByProduct, allowNeg) {
+  if (allowNeg) return;
+  for (const [pid, req] of stockByProduct.entries()) {
+    const p = getProduct(pid);
+    if (!p) throw new HttpError(404, 'Ingredient / product not found');
+    if (p.stock < req.qty - 1e-9) {
+      const unitLabel = p.is_peg ? 'ml' : p.unit || 'units';
+      const needDisp = round2(req.qty);
+      const availDisp = round2(Math.max(0, p.stock));
+      const forSrc = req.sources?.size ? ` required for ${[...req.sources].join(', ')}` : '';
+      throw new HttpError(409, `Insufficient stock for ${p.name}${forSrc} (needed ${needDisp} ${unitLabel}, available ${availDisp} ${unitLabel})`);
+    }
+  }
+}
+
+function recordRecipeConsumptions(orderId, consumptions, atIso) {
+  for (const c of consumptions) {
+    q.run(
+      `INSERT INTO recipe_consumptions(
+         order_id, product_id, product_name, qty_sold, ingredient_id, ingredient_name,
+         base_qty_consumed, qty_consumed, unit, ingredient_unit_cost, ingredient_cost, total_recipe_cost, reversed, at
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
+      orderId, c.product_id, c.product_name, c.qty_sold, c.ingredient_id, c.ingredient_name,
+      c.base_qty_consumed, c.qty_consumed, c.unit, c.ingredient_unit_cost, c.ingredient_cost, c.total_recipe_cost, atIso,
+    );
+  }
 }
 
 function deduct(order, userId) {
-  if (order.stock_deducted) return; // idempotent guard
-  for (const [productId, totalBase] of aggregateByProduct(order.items)) {
-    moveStock({ productId, type: 'sale', qty: -totalBase, unitCost: null, orderId: order.id, userId, note: `Order ${order.order_no}` });
+  const live = q.get('SELECT stock_deducted FROM orders WHERE id=?', order.id);
+  if (order.stock_deducted || live?.stock_deducted) return; // strict idempotent guard
+  const { stockByProduct, consumptions } = expandStockRequirements(order.items);
+  validateStockRequirements(stockByProduct, getSettings().allow_negative_stock === '1');
+  const t = now();
+  for (const [productId, req] of stockByProduct.entries()) {
+    const p = getProduct(productId);
+    const note = req.notes.length ? `Order ${order.order_no} (${req.notes.join('; ')})` : `Order ${order.order_no}`;
+    moveStock({ productId, type: 'sale', qty: -req.qty, unitCost: baseCost(p), orderId: order.id, userId, note, at: t });
   }
+  recordRecipeConsumptions(order.id, consumptions, t);
   q.run('UPDATE orders SET stock_deducted=1 WHERE id=?', order.id);
 }
 
 function reverse(order, userId) {
-  if (!order.stock_deducted) return;
-  for (const [productId, totalBase] of aggregateByProduct(order.items)) {
-    moveStock({ productId, type: 'sale_reversal', qty: totalBase, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
+  const live = q.get('SELECT stock_deducted FROM orders WHERE id=?', order.id);
+  if (!order.stock_deducted && !live?.stock_deducted) return;
+  if (q.get("SELECT 1 FROM stock_movements WHERE order_id=? AND type='sale_reversal' LIMIT 1", order.id)) return; // prevent duplicate restoration
+  const deducted = q.all(
+    "SELECT product_id, SUM(ABS(qty)) qty, MAX(unit_cost) unit_cost FROM stock_movements WHERE order_id=? AND type='sale' GROUP BY product_id",
+    order.id,
+  );
+  for (const row of deducted) {
+    moveStock({ productId: row.product_id, type: 'sale_reversal', qty: row.qty, unitCost: row.unit_cost, orderId: order.id, userId, note: `Cancelled ${order.order_no}` });
   }
+  q.run('UPDATE recipe_consumptions SET reversed=1 WHERE order_id=?', order.id);
   q.run('UPDATE orders SET stock_deducted=0 WHERE id=?', order.id);
 }
 

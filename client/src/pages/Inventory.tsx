@@ -65,6 +65,7 @@ export default function Inventory() {
     [filteredProducts],
   );
 
+  const physicalProducts = useMemo(() => products.filter((p) => !p.is_recipe), [products]);
   const selProd = products.find((p) => p.id === Number(movModal?.product_id));
 
   return (
@@ -78,9 +79,9 @@ export default function Inventory() {
           ))}
         </div>
         <div className="flex gap-2">
-          {admin && <Button onClick={() => setMovModal({ type: 'purchase', product_id: products[0]?.id || '', qty: '', unit_cost: '', supplier: '', invoice: '', note: '' })}>+ Add Purchase</Button>}
-          <Button variant="ghost" onClick={() => setMovModal({ type: 'wastage', product_id: products[0]?.id || '', qty: '', ml: '', note: '' })}>Record Wastage / Comp</Button>
-          {admin && <Button variant="ghost" onClick={() => setMovModal({ type: 'adjustment', product_id: products[0]?.id || '', qty: '', note: '' })}>Manual Adjustment</Button>}
+          {admin && <Button onClick={() => setMovModal({ type: 'purchase', product_id: physicalProducts[0]?.id || '', qty: '', unit_cost: '', supplier: '', invoice: '', note: '' })}>+ Add Purchase</Button>}
+          <Button variant="ghost" onClick={() => setMovModal({ type: 'wastage', product_id: physicalProducts[0]?.id || '', qty: '', ml: '', note: '' })}>Record Wastage / Comp</Button>
+          {admin && <Button variant="ghost" onClick={() => setMovModal({ type: 'adjustment', product_id: physicalProducts[0]?.id || '', qty: '', note: '' })}>Manual Adjustment</Button>}
         </div>
       </div>
 
@@ -150,7 +151,16 @@ export default function Inventory() {
               <tbody>
                 {filteredProducts.map((p) => (
                   <tr key={p.id} className="border-t border-[#E9EDF7] dark:border-[#2A3346]">
-                    <td className="p-2 font-semibold">{p.name}</td>
+                    <td className="p-2 font-semibold">
+                      <div className="flex items-center gap-1.5">
+                        <span>{p.name}</span>
+                        {p.is_recipe && (
+                          <span className="rounded-full bg-[#422AFB]/12 px-2 py-0.5 text-[10px] font-extrabold text-[#422AFB] dark:bg-[#6366F1]/20 dark:text-[#A5B4FC]">
+                            🍹 Recipe
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td>
                       <div>{p.category}</div>
                       {p.sub_category && <div className="text-xs text-[#94A3B8]">{p.sub_category}</div>}
@@ -158,6 +168,11 @@ export default function Inventory() {
                     <td>{p.size_ml ? `${p.size_ml} ml` : p.unit}</td>
                     <td>
                       <b>{p.stock_display}</b> {p.stock_unit}
+                      {p.is_recipe && (
+                        <div className="text-xs text-[#94A3B8]">
+                          makeable from ingredients{p.limiting_ingredient ? ` (min: ${p.limiting_ingredient})` : ''}
+                        </div>
+                      )}
                       {p.is_peg && (
                         <div className="text-xs text-[#94A3B8]">
                           {p.full_bottles ?? 0} btl · {p.loose_pegs_30ml ?? 0} loose pegs ({Math.round(p.stock)} ml)
@@ -165,9 +180,9 @@ export default function Inventory() {
                       )}
                     </td>
                     <td><StockDot s={p.stock_status} /></td>
-                    {admin && <td>{money(p.purchase_price)}</td>}
+                    {admin && <td>{p.is_recipe ? `${money(p.recipe_cost ?? 0)} (recipe)` : money(p.purchase_price)}</td>}
                     <td>{money(p.selling_price)}{p.is_peg ? ` · 30ml ${money(p.peg_price)}` : ''}</td>
-                    {admin && <td className="text-right font-semibold">{money(p.stock_value)}</td>}
+                    {admin && <td className="text-right font-semibold">{p.is_recipe ? <span className="text-xs text-[#94A3B8]">on ingredients</span> : money(p.stock_value)}</td>}
                   </tr>
                 ))}
                 {filteredProducts.length === 0 && (
@@ -206,7 +221,7 @@ export default function Inventory() {
             <table className="w-full text-sm">
               <thead className="text-left text-gray-500"><tr><th className="p-2">Product</th><th>System stock</th><th>Physical count (bottles / units)</th><th>Difference</th></tr></thead>
               <tbody>
-                {filteredProducts.map((p) => {
+                {filteredProducts.filter((p) => !p.is_recipe).map((p) => {
                   const v = counts[p.id] ?? '';
                   const diff = v === '' ? null : Math.round((Number(v) - p.stock_display) * 1000) / 1000;
                   return (
@@ -247,7 +262,7 @@ export default function Inventory() {
             </Field>
             <Field label="Product">
               <Select value={movModal.product_id} onChange={(e) => setMovModal({ ...movModal, product_id: Number(e.target.value) })}>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stock_display} {p.stock_unit})</option>)}
+                {physicalProducts.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stock_display} {p.stock_unit})</option>)}
               </Select>
             </Field>
             <div className="grid grid-cols-2 gap-2">

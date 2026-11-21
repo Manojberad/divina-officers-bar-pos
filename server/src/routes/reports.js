@@ -56,7 +56,7 @@ export const REPORTS = {
   inventory: {
     title: 'Inventory Report (Opening / Closing Stock)',
     build: (F, T) => {
-      const prods = q.all(`${PRODUCT_SELECT} ORDER BY c.sort, p.name`);
+      const prods = q.all(`${PRODUCT_SELECT} WHERE p.is_recipe=0 ORDER BY c.sort, p.name`);
       const mv = (pid, from, to) => q.all('SELECT type, SUM(qty) qty FROM stock_movements WHERE product_id=? AND at>=? AND (? IS NULL OR at<?) GROUP BY type', pid, from, to, to);
       return {
         columns: [C('name', 'Product'), C('category', 'Category'), C('unit', 'Unit'), C('opening', 'Opening', 'num'), C('purchased', 'Purchased', 'num'), C('sold', 'Sold', 'num'),
@@ -134,6 +134,47 @@ export const REPORTS = {
           cash_amt: x.payment_mode === 'cash' ? round(x.total) : 0, upi_amt: x.payment_mode === 'upi' ? round(x.total) : 0, total: round(x.total),
         })),
       sum: ['cash_amt', 'upi_amt', 'total'],
+    }),
+  },
+  recipe_consumption: {
+    title: 'Recipe & Ingredient Consumption',
+    build: (F, T) => ({
+      columns: [
+        C('order_no', 'Order ID'),
+        C('at', 'Date'),
+        C('product_name', 'Mocktail / Product'),
+        C('qty_sold', 'Qty Sold', 'num'),
+        C('ingredient_name', 'Ingredient'),
+        C('qty_consumed', 'Consumed', 'num'),
+        C('unit', 'Unit'),
+        C('base_deducted', 'Stock Deducted'),
+        C('ingredient_cost', 'Ingredient Cost', 'money'),
+        C('total_recipe_cost', 'Total Recipe Cost', 'money'),
+      ],
+      rows: q.all(
+        `SELECT rc.id _id, o.order_no, rc.at, rc.product_name, rc.qty_sold, rc.ingredient_name,
+                rc.qty_consumed, rc.unit, rc.base_qty_consumed, ing.unit ing_unit, ing.is_peg ing_is_peg,
+                rc.ingredient_cost, rc.total_recipe_cost
+         FROM recipe_consumptions rc
+         JOIN orders o ON o.id = rc.order_id
+         JOIN products ing ON ing.id = rc.ingredient_id
+         WHERE rc.reversed = 0 AND o.status IN ${SOLD} AND rc.at >= ? AND rc.at < ?
+         ORDER BY rc.id`,
+        F, T,
+      ).map((x) => ({
+        _id: x._id,
+        order_no: x.order_no,
+        at: local(x.at),
+        product_name: x.product_name,
+        qty_sold: round(x.qty_sold, 2),
+        ingredient_name: x.ingredient_name,
+        qty_consumed: round(x.qty_consumed, 2),
+        unit: x.unit,
+        base_deducted: `${round(x.base_qty_consumed, 2)} ${x.ing_is_peg ? 'ml' : (x.ing_unit || 'unit')}`,
+        ingredient_cost: round(x.ingredient_cost),
+        total_recipe_cost: round(x.total_recipe_cost),
+      })),
+      sum: ['ingredient_cost'],
     }),
   },
 };

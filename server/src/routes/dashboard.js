@@ -41,9 +41,10 @@ r.get('/', requireRole('admin'), (req, res) => {
   const visitors = [...customers].sort((a, b) => b.visits - a.visits).slice(0, 10);
 
   const products = q.all(`${PRODUCT_SELECT} WHERE p.active=1`).map(decorate);
+  const physicalProducts = products.filter((p) => !p.is_recipe);
   const valuation = {
-    cost: round(products.reduce((s, p) => s + p.stock_value, 0)),
-    retail: round(products.reduce((s, p) => s + p.stock_display * p.selling_price, 0)),
+    cost: round(physicalProducts.reduce((s, p) => s + p.stock_value, 0)),
+    retail: round(physicalProducts.reduce((s, p) => s + p.stock_display * p.selling_price, 0)),
     items: products.length,
   };
   const alerts = products.filter((p) => p.stock_status !== 'healthy').sort((a, b) => a.stock_display - b.stock_display);

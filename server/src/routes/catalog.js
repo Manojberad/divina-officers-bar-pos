@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { q, tx, audit, UPLOAD_DIR, getSettings } from '../db.js';
 import { requireRole, optionalAuth, isStaff } from '../auth.js';
-import { PRODUCT_SELECT, decorate, getProduct, moveStock, toBase, baseCost } from '../services.js';
+import { PRODUCT_SELECT, decorate, getProduct, moveStock, toBase, baseCost, computeRecipeMetrics } from '../services.js';
 
 const r = Router();
 export const imageUpload = multer({
@@ -20,7 +20,8 @@ const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 export function applyCategoryMargin(categoryId, marginPct) {
   const m = Math.max(0, Number(marginPct) || 0);
-  const prods = q.all('SELECT id, purchase_price, is_peg, size_ml FROM products WHERE category_id=?', categoryId);
+  // Keep recipe/composite products' selling prices independent of ingredient purchase cost
+  const prods = q.all('SELECT id, purchase_price, is_peg, size_ml FROM products WHERE category_id=? AND is_recipe=0', categoryId);
   let updated = 0;
   for (const p of prods) {
     const pp = Number(p.purchase_price) || 0;
@@ -270,9 +271,11 @@ function productFields(b) {
   if (!foodType && subCat === 'Non-Veg') foodType = 'nonveg';
   if (!subCat && foodType === 'veg') subCat = 'Veg';
   if (!subCat && foodType === 'nonveg') subCat = 'Non-Veg';
-  return [b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null, Number(b.size_ml) || 0, b.unit || 'bottle',
-    b.is_peg === true || b.is_peg === '1' || b.is_peg === 1 || b.is_peg === 'true' ? 1 : 0,
-    Number(b.purchase_price) || 0, Number(b.selling_price) || 0, Number(b.peg_price) || 0, numOrNull(b.min_stock), numOrNull(b.critical_stock), foodType];
+  const isRecipe = b.is_recipe === true || b.is_recipe === '1' || b.is_recipe === 1 || b.is_recipe === 'true' ? 1 : 0;
+  const isPeg = isRecipe ? 0 : (b.is_peg === true || b.is_peg === '1' || b.is_peg === 1 || b.is_peg === 'true' ? 1 : 0);
+  return [b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null, isRecipe ? 0 : (Number(b.size_ml) || 0), b.unit || (isRecipe ? 'glass' : 'bottle'),
+    isPeg, isRecipe,
+    Number(b.purchase_price) || 0, Number(b.selling_price) || 0, isPeg ? (Number(b.peg_price) || 0) : 0, numOrNull(b.min_stock), numOrNull(b.critical_stock), foodType];
 }
 
 r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res) => {
@@ -280,14 +283,14 @@ r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res
   if (!b.name?.trim()) return res.status(400).json({ error: 'Name required' });
   const f = productFields(b);
   if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
-  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
-  const opening = Number(b.opening_stock) || 0;
+  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, is_recipe, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
+  const opening = f[8] ? 0 : (Number(b.opening_stock) || 0);
   if (opening > 0) {
     const p = getProduct(id);
     moveStock({ productId: id, type: 'opening', qty: toBase(p, opening), unitCost: baseCost(p), userId: req.user.id, note: 'Opening stock' });
   }
-  audit(req.user.id, 'product.create', 'product', id, { name: b.name });
+  audit(req.user.id, 'product.create', 'product', id, { name: b.name, is_recipe: !!f[8] });
   res.status(201).json(decorate(getProduct(id)));
 });
 
@@ -300,12 +303,59 @@ r.put('/products/:id', requireRole('admin'), imageUpload.single('image'), (req, 
   if (!!f[7] !== !!p.is_peg && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing peg mode' });
   if (f[7] && p.is_peg && f[5] !== p.size_ml && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing bottle size' });
   const image = req.file ? `/uploads/${req.file.filename}` : b.image;
-  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
+  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, is_recipe=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
     ...f, image, b.active === false || b.active === '0' || b.active === 'false' || b.active === 0 ? 0 : 1, p.id);
   const priceChange = ['purchase_price', 'selling_price', 'peg_price'].filter((k) => req.body[k] != null && Number(req.body[k]) !== p[k]);
   audit(req.user.id, priceChange.length ? 'product.price_change' : 'product.update', 'product', p.id,
     { changes: Object.fromEntries(Object.keys(req.body).map((k) => [k, { from: p[k], to: req.body[k] }])) });
   res.json(decorate(getProduct(p.id)));
+});
+
+/* ---------- Configurable Recipes (for Mocktails & future composite drinks) ---------- */
+r.get('/products/:id/recipe', requireRole('admin', 'bartender'), (req, res) => {
+  const p = getProduct(Number(req.params.id));
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  res.json({ product_id: p.id, name: p.name, is_recipe: !!p.is_recipe, selling_price: p.selling_price, ...computeRecipeMetrics(p.id) });
+});
+
+r.put('/products/:id/recipe', requireRole('admin'), (req, res) => {
+  const pid = Number(req.params.id);
+  const p = getProduct(pid);
+  if (!p) return res.status(404).json({ error: 'Product not found' });
+  const list = Array.isArray(req.body.ingredients) ? req.body.ingredients : [];
+  const enable = req.body.is_recipe === false ? 0 : list.length > 0 ? 1 : 0;
+  if (enable && list.length === 0) return res.status(400).json({ error: 'Add at least one ingredient to enable a recipe' });
+
+  const normalized = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const ingId = Number(raw.ingredient_id);
+    if (!ingId || ingId === pid) return res.status(400).json({ error: 'Invalid or self-referencing ingredient' });
+    if (seen.has(ingId)) return res.status(400).json({ error: 'Duplicate ingredient in recipe' });
+    const ing = getProduct(ingId);
+    if (!ing) return res.status(400).json({ error: `Ingredient #${ingId} not found` });
+    if (ing.is_recipe) return res.status(400).json({ error: `${ing.name} is itself a recipe product and cannot be nested as an ingredient` });
+    const qty = Number(raw.qty);
+    if (!(qty > 0)) return res.status(400).json({ error: `Quantity for ${ing.name} must be positive` });
+    const displayQty = raw.display_qty != null && Number(raw.display_qty) > 0 ? Number(raw.display_qty) : qty;
+    const displayUnit = String(raw.display_unit || (ing.is_peg ? 'ml' : ing.unit || 'unit')).trim();
+    seen.add(ingId);
+    normalized.push({ ingredient_id: ingId, qty, display_qty: displayQty, display_unit: displayUnit });
+  }
+
+  tx(() => {
+    q.run('DELETE FROM product_recipes WHERE product_id=?', pid);
+    for (const row of normalized) {
+      q.run(
+        'INSERT INTO product_recipes(product_id, ingredient_id, qty, display_qty, display_unit) VALUES(?,?,?,?,?)',
+        pid, row.ingredient_id, row.qty, row.display_qty, row.display_unit,
+      );
+    }
+    q.run('UPDATE products SET is_recipe=?, is_peg=CASE WHEN ?=1 THEN 0 ELSE is_peg END WHERE id=?', enable, enable, pid);
+  });
+
+  audit(req.user.id, 'product.recipe_update', 'product', pid, { is_recipe: !!enable, ingredients: normalized });
+  res.json(decorate(getProduct(pid)));
 });
 
 r.post('/products/:id/favourite', requireRole('admin', 'bartender'), (req, res) => {

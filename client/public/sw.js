@@ -1,6 +1,6 @@
 /* DivinaBar service worker – offline app shell + image cache. No external requests. */
-const SHELL = 'divinabar-shell-v31';
-const RUNTIME = 'divinabar-runtime-v31';
+const SHELL = 'divinabar-shell-v32';
+const RUNTIME = 'divinabar-runtime-v32';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/Login_bg.webp', '/Login_logo.png'])).then(() => self.skipWaiting()));

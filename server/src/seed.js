@@ -7,6 +7,7 @@ import { createOrder, transition, moveStock, getProduct, toBase, baseCost } from
 import { STATION_OFFICERS } from './officers-data.js';
 import { STATION_ALCOHOL } from './alcohol-data.js';
 import { STATION_SUNDRIES } from './sundries-data.js';
+import { STATION_MOCKTAILS } from './mocktails-data.js';
 
 const svg = (label, color, kind) => {
   const shape = kind === 'bottle'
@@ -22,6 +23,7 @@ const svg = (label, color, kind) => {
 
 const CATS = [
   ['Alcohol', 3, 1, 5],
+  ['Mocktails', 5, 2, 10],
   ['Soft Drinks', 24, 10, 10],
   ['Food', 10, 4, 10],
   ['Cigarettes', 10, 3, 7.5],
@@ -268,8 +270,28 @@ export function seedStation() {
         moveStock({ productId: pid, type: 'opening', qty, unitCost: baseCost(p), userId: adminId, note: `Opening Sundries Stock: ${qty} ${unit}` });
       }
     }
+
+    // Recipe-based Mocktails (Blue Lagoon & Mint Mojito) reusing existing inventory ingredients
+    for (const m of STATION_MOCKTAILS) {
+      const mPid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,NULL,?,?,?,0,?,0,1,0,?,0,0,?,1)`,
+          m.name, catMap[m.category], m.category, m.description, resolveImage(m.name, path.basename(m.image)), m.unit, m.selling_price, m.favourite ? 1 : 0,
+        ).lastInsertRowid,
+      );
+      for (const ing of m.ingredients) {
+        const ingRow = q.get('SELECT id FROM products WHERE name=? COLLATE NOCASE', ing.ingredientName);
+        if (ingRow) {
+          q.run(
+            'INSERT OR IGNORE INTO product_recipes(product_id, ingredient_id, qty, display_qty, display_unit) VALUES(?,?,?,?,?)',
+            mPid, ingRow.id, ing.qty, ing.display_qty, ing.display_unit,
+          );
+        }
+      }
+    }
   });
-  console.log('[seed] station dataset ready (62 accounts, 5 categories, 112 products)');
+  console.log('[seed] station dataset ready (62 accounts, 6 categories, 114 products incl. 2 recipe mocktails)');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

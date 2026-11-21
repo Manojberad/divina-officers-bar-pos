@@ -671,7 +671,7 @@ export default function POS({ mode, tableCode, preload, onPlaced, readOnly = fal
           {categories.map((c: any) => {
             const cname = String(c.name || '').toLowerCase();
             const catProds = products.filter((p) => p.category_id === c.id);
-            const icon = cname === 'alcohol' ? '🥃' : cname.includes('soft') ? '🥤' : cname === 'food' ? '🍽' : cname === 'cigarettes' ? '🚬' : '🧊';
+            const icon = cname === 'alcohol' ? '🥃' : cname.includes('mocktail') ? '🍹' : cname.includes('soft') ? '🥤' : cname === 'food' ? '🍽' : cname === 'cigarettes' ? '🚬' : '🧊';
             let subs: string[] = [];
             if (cname === 'alcohol') {
               const sSet = new Set(catProds.map((p) => p.sub_category).filter(Boolean) as string[]);
