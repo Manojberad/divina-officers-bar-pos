@@ -52,6 +52,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
+app.use('/uploads', express.static(path.resolve(__dirname, '../assets/products'), { maxAge: '7d' }));
 const ASSETS_IMG = path.resolve(__dirname, '../../Assets/img');
 if (fs.existsSync(ASSETS_IMG)) {
   app.get(/^\/Login_bg\.(png|jpg|jpeg|webp)$/i, (_req, res, next) => {

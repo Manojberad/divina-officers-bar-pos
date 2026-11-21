@@ -9,6 +9,8 @@ interface EditLine {
   name: string;
   serve_type: string;
   peg_ml: number | null;
+  variant_id?: number | null;
+  variant_name?: string | null;
   qty: number;
   unit_price: number;
   purchase_cost?: number | null;
@@ -33,6 +35,7 @@ export function EditOrderModal({
   const [search, setSearch] = useState('');
   const [addProdId, setAddProdId] = useState('');
   const [addServe, setAddServe] = useState<'peg30' | 'peg60' | 'bottle' | 'unit'>('peg30');
+  const [addVariantId, setAddVariantId] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -43,6 +46,8 @@ export function EditOrderModal({
         name: i.name,
         serve_type: i.serve_type || 'unit',
         peg_ml: i.serve_type === 'peg' ? Number(i.peg_ml || 30) : null,
+        variant_id: i.variant_id ? Number(i.variant_id) : null,
+        variant_name: i.variant_name || null,
         qty: Number(i.qty) || 1,
         unit_price: Number(i.unit_price) || 0,
         ...(i.purchase_cost != null ? { purchase_cost: Number(i.purchase_cost) } : {}),
@@ -52,6 +57,7 @@ export function EditOrderModal({
     setReason('');
     setSearch('');
     setAddProdId('');
+    setAddVariantId('');
     setSaving(false);
     api('/products', { cache: false }).then(setProducts).catch(() => {});
   }, [order]);
@@ -67,7 +73,7 @@ export function EditOrderModal({
         return false;
       }
       if (p.is_local_purchase) return false; // local purchase items require cost entry at POS
-      if (p.stock_status === 'out') return false;
+      if (p.track_inventory !== false && p.stock_status === 'out') return false;
       if (!q) return true;
       return `${p.name} ${p.category || ''} ${p.brand || ''}`.toLowerCase().includes(q);
     });
@@ -81,6 +87,8 @@ export function EditOrderModal({
     let serve_type = 'unit';
     let peg_ml: number | null = null;
     let unit_price = Number(selProd.selling_price) || 0;
+    let variant_id: number | null = null;
+    let variant_name: string | null = null;
     if (selProd.is_peg) {
       if (isStaff && addServe === 'bottle') {
         serve_type = 'bottle';
@@ -94,13 +102,22 @@ export function EditOrderModal({
         peg_ml = 30;
         unit_price = Number(selProd.peg_price) || 0;
       }
+    } else {
+      const activeVars = (selProd.variants || []).filter((v: any) => v.active !== false);
+      if (activeVars.length > 0) {
+        const chosen = activeVars.find((v: any) => String(v.id) === addVariantId) || activeVars[0];
+        variant_id = chosen.id;
+        variant_name = chosen.display_label || chosen.name;
+        unit_price = Number(chosen.selling_price) || 0;
+      }
     }
     setItems((prev) => {
-      const idx = prev.findIndex((l) => l.product_id === selProd.id && l.serve_type === serve_type && (l.peg_ml || null) === peg_ml);
+      const idx = prev.findIndex((l) => l.product_id === selProd.id && l.serve_type === serve_type && (l.peg_ml || null) === peg_ml && (l.variant_id || null) === variant_id);
       if (idx >= 0) return prev.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l));
-      return [...prev, { product_id: selProd.id, name: selProd.name, serve_type, peg_ml, qty: 1, unit_price }];
+      return [...prev, { product_id: selProd.id, name: selProd.name, serve_type, peg_ml, variant_id, variant_name, qty: 1, unit_price }];
     });
     setAddProdId('');
+    setAddVariantId('');
   };
 
   const save = async (e: React.FormEvent) => {
@@ -116,6 +133,7 @@ export function EditOrderModal({
             product_id: l.product_id,
             serve_type: l.serve_type,
             peg_ml: l.peg_ml,
+            ...(l.variant_id ? { variant_id: l.variant_id, variant_name: l.variant_name } : {}),
             qty: l.qty,
             ...(l.purchase_cost != null ? { purchase_cost: l.purchase_cost } : {}),
           })),
@@ -196,7 +214,14 @@ export function EditOrderModal({
             />
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-[190px] flex-1">
-                <Select value={addProdId} onChange={(e) => { setAddProdId(e.target.value); setAddServe('peg30'); }}>
+                <Select value={addProdId} onChange={(e) => {
+                  const pid = e.target.value;
+                  setAddProdId(pid);
+                  setAddServe('peg30');
+                  const found = selectableProducts.find((x) => String(x.id) === pid);
+                  const firstVar = (found?.variants || []).find((v: any) => v.active !== false);
+                  setAddVariantId(firstVar ? String(firstVar.id) : '');
+                }}>
                   <option value="">Choose product ({selectableProducts.length} available)…</option>
                   {selectableProducts.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -211,6 +236,15 @@ export function EditOrderModal({
                     <option value="peg30">Small (30 ml)</option>
                     <option value="peg60">Large (60 ml)</option>
                     {isStaff && <option value="bottle">Full Bottle</option>}
+                  </Select>
+                </div>
+              )}
+              {!selProd?.is_peg && (selProd?.variants || []).filter((v: any) => v.active !== false).length > 0 && (
+                <div className="w-48">
+                  <Select value={addVariantId} onChange={(e) => setAddVariantId(e.target.value)}>
+                    {(selProd.variants || []).filter((v: any) => v.active !== false).map((v: any) => (
+                      <option key={v.id} value={String(v.id)}>{v.display_label || v.name} ({money(v.selling_price)})</option>
+                    ))}
                   </Select>
                 </div>
               )}
@@ -320,6 +354,7 @@ export function RepeatOrderModal({
           product_id: i.product_id,
           serve_type: i.serve_type,
           peg_ml: i.serve_type === 'peg' ? i.peg_ml : null,
+          ...(i.variant_id ? { variant_id: i.variant_id, variant_name: i.variant_name } : {}),
           qty: i.qty,
           ...(i.purchase_cost != null ? { purchase_cost: i.purchase_cost } : {}),
         })),

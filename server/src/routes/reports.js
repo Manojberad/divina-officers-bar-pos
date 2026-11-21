@@ -14,12 +14,28 @@ const local = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { hour12: fa
 const C = (key, label, type) => ({ key, label, type });
 
 const salesGrouped = (fmt, label) => (F, T) => ({
-  columns: [C('period', label), C('orders', 'Orders', 'int'), C('items', 'Items', 'num'), C('revenue', 'Revenue', 'money'), C('avg', 'Avg Order', 'money')],
+  columns: [
+    C('period', label),
+    C('orders', 'Orders', 'int'),
+    C('items', 'Items', 'num'),
+    C('packed_snacks', 'Packed Snacks', 'money'),
+    C('kitchen_food', 'Kitchen / Food', 'money'),
+    C('revenue', 'Revenue', 'money'),
+    C('avg', 'Avg Order', 'money'),
+  ],
   rows: q.all(`SELECT strftime('${fmt}', o.created_at,'localtime') period, COUNT(DISTINCT o.id) orders, SUM(o.total) revenue,
-      (SELECT SUM(qty) FROM order_items i JOIN orders o2 ON o2.id=i.order_id WHERE o2.status IN ${SOLD} AND o2.created_at>=? AND o2.created_at<? AND strftime('${fmt}', o2.created_at,'localtime')=strftime('${fmt}', o.created_at,'localtime')) items
-    FROM orders o WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? GROUP BY period ORDER BY period`, F, T, F, T)
-    .map((x) => ({ ...x, revenue: round(x.revenue), avg: round(x.revenue / x.orders) })),
-  sum: ['orders', 'items', 'revenue'],
+      (SELECT SUM(qty) FROM order_items i JOIN orders o2 ON o2.id=i.order_id WHERE o2.status IN ${SOLD} AND o2.created_at>=? AND o2.created_at<? AND strftime('${fmt}', o2.created_at,'localtime')=strftime('${fmt}', o.created_at,'localtime')) items,
+      (SELECT COALESCE(SUM(i.line_total),0) FROM order_items i JOIN orders o2 ON o2.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN categories c ON c.id=p.category_id WHERE o2.status IN ${SOLD} AND o2.created_at>=? AND o2.created_at<? AND strftime('${fmt}', o2.created_at,'localtime')=strftime('${fmt}', o.created_at,'localtime') AND c.name='Packed Snacks') packed_snacks,
+      (SELECT COALESCE(SUM(i.line_total),0) FROM order_items i JOIN orders o2 ON o2.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN categories c ON c.id=p.category_id WHERE o2.status IN ${SOLD} AND o2.created_at>=? AND o2.created_at<? AND strftime('${fmt}', o2.created_at,'localtime')=strftime('${fmt}', o.created_at,'localtime') AND c.name IN ('Kitchen / Food','Food')) kitchen_food
+    FROM orders o WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? GROUP BY period ORDER BY period`, F, T, F, T, F, T, F, T)
+    .map((x) => ({
+      ...x,
+      packed_snacks: round(x.packed_snacks),
+      kitchen_food: round(x.kitchen_food),
+      revenue: round(x.revenue),
+      avg: round(x.revenue / x.orders),
+    })),
+  sum: ['orders', 'items', 'packed_snacks', 'kitchen_food', 'revenue'],
 });
 
 export const REPORTS = {
@@ -40,23 +56,34 @@ export const REPORTS = {
   product: {
     title: 'Product-wise Sales',
     build: (F, T) => ({
-      columns: [C('name', 'Product'), C('category', 'Category'), C('serve', 'Serve'), C('qty', 'Qty', 'num'), C('volume', 'Volume (ml)', 'num'), C('revenue', 'Revenue', 'money')],
+      columns: [
+        C('name', 'Product'),
+        C('category', 'Category'),
+        C('serve', 'Variant / Serve'),
+        C('qty', 'Qty', 'num'),
+        C('unit_price', 'Selling Price', 'money'),
+        C('volume', 'Volume (ml)', 'num'),
+        C('revenue', 'Revenue', 'money'),
+      ],
       rows: q.all(`SELECT i.product_id _id, i.name, c.name category,
-          CASE WHEN i.serve_type='peg' AND i.peg_ml=30 THEN 'Small (30 ml)'
+          CASE WHEN i.variant_name IS NOT NULL AND i.variant_name <> '' THEN i.variant_name
+               WHEN i.serve_type='peg' AND i.peg_ml=30 THEN 'Small (30 ml)'
                WHEN i.serve_type='peg' AND i.peg_ml=60 THEN 'Large (60 ml)'
                WHEN i.serve_type='peg' THEN 'Peg ' || CAST(i.peg_ml AS INT) || 'ml'
                WHEN i.serve_type='bottle' THEN 'Full Bottle'
-               ELSE i.serve_type END serve,
-          SUM(i.qty) qty, SUM(CASE WHEN p.is_peg=1 THEN i.base_qty ELSE 0 END) volume, SUM(i.line_total) revenue
+               WHEN p.unit='packet' THEN '1 Packet'
+               ELSE COALESCE(p.unit, i.serve_type) END serve,
+          SUM(i.qty) qty, i.unit_price, SUM(CASE WHEN p.is_peg=1 THEN i.base_qty ELSE 0 END) volume, SUM(i.line_total) revenue
         FROM order_items i JOIN orders o ON o.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN categories c ON c.id=p.category_id
-        WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? GROUP BY i.product_id, serve ORDER BY revenue DESC`, F, T).map((x) => ({ ...x, revenue: round(x.revenue) })),
+        WHERE o.status IN ${SOLD} AND o.created_at>=? AND o.created_at<? GROUP BY i.product_id, serve, i.unit_price ORDER BY revenue DESC`, F, T)
+        .map((x) => ({ ...x, unit_price: round(x.unit_price), revenue: round(x.revenue) })),
       sum: ['qty', 'revenue'],
     }),
   },
   inventory: {
     title: 'Inventory Report (Opening / Closing Stock)',
     build: (F, T) => {
-      const prods = q.all(`${PRODUCT_SELECT} WHERE p.is_recipe=0 AND p.is_local_purchase=0 ORDER BY c.sort, p.name`);
+      const prods = q.all(`${PRODUCT_SELECT} WHERE p.is_recipe=0 AND p.is_local_purchase=0 AND p.track_inventory=1 ORDER BY c.sort, p.name`);
       const mv = (pid, from, to) => q.all('SELECT type, SUM(qty) qty FROM stock_movements WHERE product_id=? AND at>=? AND (? IS NULL OR at<?) GROUP BY type', pid, from, to, to);
       return {
         columns: [C('name', 'Product'), C('category', 'Category'), C('unit', 'Unit'), C('opening', 'Opening', 'num'), C('purchased', 'Purchased', 'num'), C('sold', 'Sold', 'num'),
@@ -109,7 +136,7 @@ export const REPORTS = {
     build: (F, T) => ({
       columns: [C('order_no', 'Order'), C('created', 'Date'), C('customer', 'Customer'), C('role', 'Role'), C('table', 'Table'), C('items', 'Items'), C('status', 'Status'), C('payment', 'Payment'), C('approval', 'Approval'), C('total', 'Total', 'money'), C('by', 'Created By')],
       rows: q.all(`SELECT o.id _id, o.order_no, o.created_at, u.name customer, u.role customer_role, t.name tbl, o.type, o.status, o.payment_mode, o.payment_ref, o.approval_status, o.total, cb.name by_name,
-          (SELECT GROUP_CONCAT(i.qty || ' x ' || i.name || CASE WHEN i.serve_type='peg' AND i.peg_ml=30 THEN ' (Small 30ml)' WHEN i.serve_type='peg' AND i.peg_ml=60 THEN ' (Large 60ml)' WHEN i.serve_type='peg' THEN ' (' || CAST(i.peg_ml AS INT) || 'ml)' ELSE '' END, '; ') FROM order_items i WHERE i.order_id=o.id) items
+          (SELECT GROUP_CONCAT(i.qty || ' x ' || i.name || CASE WHEN i.variant_name IS NOT NULL AND i.variant_name <> '' THEN ' (' || i.variant_name || ')' WHEN i.serve_type='peg' AND i.peg_ml=30 THEN ' (Small 30ml)' WHEN i.serve_type='peg' AND i.peg_ml=60 THEN ' (Large 60ml)' WHEN i.serve_type='peg' THEN ' (' || CAST(i.peg_ml AS INT) || 'ml)' ELSE '' END, '; ') FROM order_items i WHERE i.order_id=o.id) items
           FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN tables t ON t.id=o.table_id LEFT JOIN users cb ON cb.id=o.created_by
           WHERE o.created_at>=? AND o.created_at<? ORDER BY o.id`, F, T)
         .map((x) => ({
@@ -361,6 +388,46 @@ export const REPORTS = {
         note: [x.opening_note, x.closing_note].filter(Boolean).join(' · '),
       })),
       sum: ['orders', 'ongoing', 'member_bill', 'guest_cash', 'guest_upi', 'revenue'],
+    }),
+  },
+  snacks_kitchen: {
+    title: 'Packed Snacks & Kitchen / Food Sales',
+    build: (F, T) => ({
+      columns: [
+        C('category', 'Category'),
+        C('product_name', 'Product Name'),
+        C('variant', 'Selected Variant'),
+        C('qty', 'Qty Sold', 'num'),
+        C('selling_price', 'Selling Price', 'money'),
+        C('total_sales', 'Total Sales Value', 'money'),
+      ],
+      rows: q.all(
+        `SELECT i.product_id || ':' || COALESCE(i.variant_name, '') || ':' || i.unit_price _id,
+                c.name category,
+                i.name product_name,
+                CASE WHEN i.variant_name IS NOT NULL AND i.variant_name <> '' THEN i.variant_name
+                     WHEN p.unit = 'packet' THEN '1 Packet'
+                     ELSE COALESCE(p.unit, 'Standard') END variant,
+                SUM(i.qty) qty,
+                i.unit_price selling_price,
+                SUM(i.line_total) total_sales
+         FROM order_items i
+         JOIN orders o ON o.id = i.order_id
+         JOIN products p ON p.id = i.product_id
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE o.status IN ${SOLD}
+           AND c.name IN ('Packed Snacks', 'Kitchen / Food', 'Food')
+           AND o.created_at >= ? AND o.created_at < ?
+         GROUP BY c.name, i.product_id, i.name, variant, i.unit_price
+         ORDER BY CASE c.name WHEN 'Packed Snacks' THEN 1 ELSE 2 END, total_sales DESC, i.name`,
+        F, T,
+      ).map((x) => ({
+        ...x,
+        qty: round(x.qty, 2),
+        selling_price: round(x.selling_price),
+        total_sales: round(x.total_sales),
+      })),
+      sum: ['qty', 'total_sales'],
     }),
   },
 };

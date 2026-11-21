@@ -98,6 +98,23 @@ try {
   const coke250 = prods1.find((p) => p.name === 'Coca-Cola 250 ml');
   assert(blueLagoon && blueCuracao && freshLime && coke250, 'Station products seeded');
 
+  // Verify Packed Snacks (7) & Kitchen / Food (11) catalogue seeded cleanly with variants
+  const packedNames = ['Cream & Onion Wafers', 'Salted Wafers', 'Salted Peanuts', 'Singh Bhujia', 'Masala Wafers', 'Masala Singh Bhujia', 'Moong Dal'];
+  for (const nm of packedNames) {
+    const found = prods1.filter((p) => p.name === nm);
+    assert.equal(found.length, 1, `Station seed includes exactly 1 Packed Snack: ${nm}`);
+    assert.equal(found[0].category, 'Packed Snacks');
+    assert.equal(found[0].track_inventory, true);
+  }
+  const kitchenNames = ['Mix Veg Pakoda', 'Peanuts', 'Maggi', 'Chicken Snacks', 'Paneer Snacks', 'French Fries', 'Paneer Pakoda', 'Egg Bhurji', 'Egg Omelette', 'Boiled Eggs', 'Green Salad'];
+  for (const nm of kitchenNames) {
+    const found = prods1.filter((p) => p.name === nm);
+    assert.equal(found.length, 1, `Station seed includes exactly 1 Kitchen / Food item: ${nm}`);
+    assert.equal(found[0].category, 'Kitchen / Food');
+    assert.equal(found[0].track_inventory, false);
+    assert(found[0].variants.length >= 1, `${nm} has serving variant(s) configured`);
+  }
+
   const stockBefore = {
     blueCuracao: blueCuracao.stock,
     freshLime: freshLime.stock,

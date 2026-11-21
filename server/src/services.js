@@ -38,6 +38,29 @@ export function getMiscMarginPct() {
   return m != null && !isNaN(Number(m)) ? Math.max(0, Number(m)) : 10;
 }
 
+export function getVariants(productId, includeInactive = false) {
+  return q.all(
+    `SELECT id, product_id, name, portion_label, selling_price, sort, active
+     FROM product_variants
+     WHERE product_id = ? ${includeInactive ? '' : 'AND active = 1'}
+     ORDER BY sort, id`,
+    productId,
+  ).map((v) => ({
+    ...v,
+    selling_price: round2(v.selling_price),
+    active: !!v.active,
+    display_label: formatVariantLabel(v),
+  }));
+}
+
+export function formatVariantLabel(v) {
+  if (!v) return null;
+  const n = String(v.name || '').trim();
+  const p = String(v.portion_label || '').trim();
+  if (!p || p.toLowerCase() === n.toLowerCase()) return n;
+  return `${n} (${p})`;
+}
+
 export function getRecipe(productId) {
   return q.all(
     `SELECT r.id, r.product_id, r.ingredient_id, r.qty, r.display_qty, r.display_unit,
@@ -82,6 +105,10 @@ export function computeRecipeMetrics(productId) {
 export function decorate(p) {
   if (!p) return p;
   const { low, crit } = thresholds(p);
+  const variants = getVariants(p.id, true);
+  const activeVariants = variants.filter((v) => v.active);
+  const tracked = p.is_local_purchase ? false : p.is_recipe ? true : p.track_inventory !== 0;
+
   if (p.is_local_purchase) {
     return {
       ...p,
@@ -89,10 +116,12 @@ export function decorate(p) {
       is_recipe: false,
       party_only: !!p.party_only,
       is_local_purchase: true,
+      track_inventory: false,
       local_margin_pct: getMiscMarginPct(),
       favourite: !!p.favourite,
       active: !!p.active,
       sub_category: p.sub_category || null,
+      variants,
       recipe: [],
       recipe_cost: null,
       stock_display: 0,
@@ -114,9 +143,11 @@ export function decorate(p) {
       is_recipe: true,
       party_only: !!p.party_only,
       is_local_purchase: false,
+      track_inventory: true,
       favourite: !!p.favourite,
       active: !!p.active,
       sub_category: p.sub_category || null,
+      variants,
       recipe: m.ingredients,
       recipe_cost: m.recipe_cost,
       limiting_ingredient: m.limiting_ingredient,
@@ -130,6 +161,32 @@ export function decorate(p) {
       stock_value: 0, // Physical stock value is accounted on raw ingredients to prevent double counting
     };
   }
+  if (!tracked) {
+    const minVariantPrice = activeVariants.length ? Math.min(...activeVariants.map((v) => v.selling_price)) : p.selling_price;
+    return {
+      ...p,
+      is_peg: false,
+      is_recipe: false,
+      party_only: !!p.party_only,
+      is_local_purchase: false,
+      track_inventory: false,
+      selling_price: activeVariants.length ? minVariantPrice : p.selling_price,
+      favourite: !!p.favourite,
+      active: !!p.active,
+      sub_category: p.sub_category || null,
+      variants,
+      recipe: [],
+      recipe_cost: null,
+      stock_display: 0,
+      stock_unit: p.unit || 'plate',
+      full_bottles: 0,
+      loose_pegs_30ml: 0,
+      low_level: low,
+      critical_level: crit,
+      stock_status: 'healthy',
+      stock_value: 0,
+    };
+  }
   const fullBottles = p.is_peg && p.size_ml > 0 ? Math.floor(Math.max(0, p.stock) / p.size_ml) : Math.floor(Math.max(0, p.stock));
   const looseMl = p.is_peg && p.size_ml > 0 ? Math.round((Math.max(0, p.stock) - fullBottles * p.size_ml) * 100) / 100 : 0;
   const loosePegs = p.is_peg && p.size_ml > 0 ? Math.round((looseMl / 30) * 100) / 100 : 0;
@@ -139,9 +196,11 @@ export function decorate(p) {
     is_recipe: false,
     party_only: !!p.party_only,
     is_local_purchase: false,
+    track_inventory: true,
     favourite: !!p.favourite,
     active: !!p.active,
     sub_category: p.sub_category || null,
+    variants,
     recipe: [],
     recipe_cost: null,
     stock_display: Math.round(displayQty(p) * 100) / 100,
@@ -218,6 +277,8 @@ export function priceItem(p, item, _settings, isStaff, isParty = false) {
 
   let serve = item.serve_type || (p.is_peg ? (isStaff ? 'bottle' : 'peg') : 'unit');
   let pegMl = null, unitPrice, base;
+  let variantId = null, variantName = null;
+
   if (serve === 'peg') {
     if (!p.is_peg) throw new HttpError(400, `${p.name} cannot be served by peg`);
     pegMl = Number(item.peg_ml || 30);
@@ -231,11 +292,36 @@ export function priceItem(p, item, _settings, isStaff, isParty = false) {
     } else {
       serve = 'unit';
     }
-    unitPrice = p.selling_price;
+    const activeVariants = !p.is_peg ? getVariants(p.id, false) : [];
+    let chosenVariant = null;
+    if (item.variant_id != null && item.variant_id !== '') {
+      chosenVariant = activeVariants.find((v) => v.id === Number(item.variant_id));
+      if (!chosenVariant) throw new HttpError(400, `Selected variant is not available for ${p.name}`);
+    } else if (activeVariants.length > 0) {
+      if (item.variant_name) {
+        const vn = String(item.variant_name).trim().toLowerCase();
+        chosenVariant = activeVariants.find((v) => v.name.toLowerCase() === vn || v.display_label.toLowerCase() === vn) || null;
+      }
+      if (!chosenVariant) {
+        if (activeVariants.length === 1) chosenVariant = activeVariants[0];
+        else throw new HttpError(400, `Please select a variant for ${p.name}`);
+      }
+    }
+    if (chosenVariant) {
+      variantId = chosenVariant.id;
+      variantName = chosenVariant.display_label;
+      unitPrice = chosenVariant.selling_price;
+    } else {
+      unitPrice = p.selling_price;
+    }
     base = p.is_peg ? qty * p.size_ml : qty;
   }
   if (isStaff && item.unit_price != null && item.unit_price !== '' && Number(item.unit_price) >= 0) unitPrice = Number(item.unit_price);
-  return { product_id: p.id, name: p.name, serve_type: serve, peg_ml: pegMl, qty, unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100, base_qty: base, purchase_cost: null };
+  return {
+    product_id: p.id, name: p.name, serve_type: serve, peg_ml: pegMl, qty,
+    unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100,
+    base_qty: base, purchase_cost: null, variant_id: variantId, variant_name: variantName,
+  };
 }
 
 export function loadOrder(id) {
@@ -407,8 +493,8 @@ export function createOrder(body, user) {
     );
     const oid = Number(r.lastInsertRowid);
     for (const i of items) {
-      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        oid, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null);
+      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost, variant_id, variant_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        oid, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null, i.variant_id ?? null, i.variant_name ?? null);
     }
     const evNote = isDraft ? 'pre-order / draft created' : autoGuestServed ? 'auto-accepted (guest awaiting Cash/UPI)' : 'auto-accepted & billed';
     q.run('INSERT INTO order_events(order_id, from_status, to_status, user_id, note, at) VALUES(?,?,?,?,?,?)', oid, null, status, user?.id ?? null, evNote, t);
@@ -526,8 +612,8 @@ export function editOrderItems(orderId, rawItems, notes, user, reason = null) {
     const total = Math.round(newItems.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
     q.run('DELETE FROM order_items WHERE order_id=?', o.id);
     for (const i of newItems) {
-      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        o.id, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null);
+      q.run(`INSERT INTO order_items(order_id, product_id, name, serve_type, peg_ml, qty, unit_price, line_total, base_qty, purchase_cost, variant_id, variant_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        o.id, i.product_id, i.name, i.serve_type, i.peg_ml, i.qty, i.unit_price, i.line_total, i.base_qty, i.purchase_cost ?? null, i.variant_id ?? null, i.variant_name ?? null);
     }
     const nextNotes = notes !== undefined ? (notes || null) : o.notes;
     const nextApproval = o.status === 'closed' && o.user_id ? 'pending' : o.approval_status;
@@ -603,7 +689,7 @@ export function expandStockRequirements(items) {
       });
     } else if (p.is_recipe) {
       recipeQtyByProd.set(p.id, (recipeQtyByProd.get(p.id) || 0) + Number(i.qty));
-    } else {
+    } else if (p.track_inventory !== 0) {
       addStockNeed(p.id, Number(i.base_qty), null, null);
     }
   }

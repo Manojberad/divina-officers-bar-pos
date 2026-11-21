@@ -19,6 +19,7 @@ r.post('/movement', staff, (req, res) => {
   if (!p) throw new HttpError(404, 'Product not found');
   if (p.is_recipe) throw new HttpError(400, `Stock for recipe product ${p.name} is managed automatically via its ingredients`);
   if (p.is_local_purchase) throw new HttpError(400, `${p.name} is a locally purchased on-demand item and is not tracked in regular stocked inventory`);
+  if (p.track_inventory === 0) throw new HttpError(400, `Inventory tracking is disabled for ${p.name} — enable 'Track Inventory' in Products first`);
   if (!['purchase', 'wastage', 'complimentary', 'adjustment', 'removal'].includes(type)) throw new HttpError(400, 'Invalid movement type');
   if (req.user.role === 'bartender' && !['wastage', 'complimentary'].includes(type)) throw new HttpError(403, 'Bartenders may record wastage/complimentary only');
   // Quantity in bottles/units, or ml for peg products
@@ -57,6 +58,7 @@ r.post('/reconcile', admin, (req, res) => {
     if (!p) throw new HttpError(404, 'Product not found');
     if (p.is_recipe) throw new HttpError(400, `Cannot reconcile recipe product ${p.name} directly — reconcile its ingredients instead`);
     if (p.is_local_purchase) throw new HttpError(400, `Cannot reconcile locally purchased item ${p.name} — it is not stocked inventory`);
+    if (p.track_inventory === 0) throw new HttpError(400, `Inventory tracking is disabled for ${p.name}`);
     const sys = displayQty(p);
     const phys = Number(i.physical_qty);
     const diff = Math.round((phys - sys) * 1000) / 1000;
@@ -77,7 +79,7 @@ r.get('/reconciliations', staff, (req, res) => {
 });
 
 r.get('/alerts', staff, (_req, res) => {
-  const rows = q.all(`${PRODUCT_SELECT} WHERE p.active=1 AND p.is_local_purchase=0`).map(decorate).filter((p) => p.stock_status !== 'healthy');
+  const rows = q.all(`${PRODUCT_SELECT} WHERE p.active=1 AND p.is_local_purchase=0 AND (p.track_inventory=1 OR p.is_recipe=1)`).map(decorate).filter((p) => p.stock_status !== 'healthy');
   res.json(rows.sort((a, b) => a.stock_display - b.stock_display));
 });
 

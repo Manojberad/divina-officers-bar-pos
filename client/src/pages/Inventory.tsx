@@ -65,7 +65,7 @@ export default function Inventory() {
     [filteredProducts],
   );
 
-  const physicalProducts = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase), [products]);
+  const physicalProducts = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase && p.track_inventory !== false), [products]);
   const selProd = products.find((p) => p.id === Number(movModal?.product_id));
 
   return (
@@ -179,6 +179,8 @@ export default function Inventory() {
                     <td>
                       {p.is_local_purchase ? (
                         <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">On-demand (no stock)</span>
+                      ) : p.track_inventory === false && !p.is_recipe ? (
+                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Not tracked (Kitchen)</span>
                       ) : (
                         <>
                           <b>{p.stock_display}</b> {p.stock_unit}
@@ -195,7 +197,7 @@ export default function Inventory() {
                         </>
                       )}
                     </td>
-                    <td>{p.is_local_purchase ? <span className="text-xs font-bold text-[#94A3B8]">—</span> : <StockDot s={p.stock_status} />}</td>
+                    <td>{p.is_local_purchase || (p.track_inventory === false && !p.is_recipe) ? <span className="text-xs font-bold text-[#94A3B8]">—</span> : <StockDot s={p.stock_status} />}</td>
                     {admin && <td>{p.is_local_purchase ? 'Entered at sale' : p.is_recipe ? `${money(p.recipe_cost ?? 0)} (recipe)` : money(p.purchase_price)}</td>}
                     <td>{p.is_local_purchase ? `Cost + ${p.local_margin_pct ?? 10}%` : `${money(p.selling_price)}${p.is_peg ? ` · 30ml ${money(p.peg_price)}` : ''}`}</td>
                     {admin && <td className="text-right font-semibold">{p.is_local_purchase ? <span className="text-xs text-[#94A3B8]">on-demand</span> : p.is_recipe ? <span className="text-xs text-[#94A3B8]">on ingredients</span> : money(p.stock_value)}</td>}

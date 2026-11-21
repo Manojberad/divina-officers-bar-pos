@@ -5,13 +5,14 @@ import { Button, Card, Field, Input, Modal, Select, StockDot } from '../componen
 
 const BLANK = {
   name: '', category_id: '', sub_category: '', brand: '', description: '', size_ml: 750, unit: 'bottle',
-  is_peg: true, is_recipe: false, party_only: false, is_local_purchase: false, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, active: true,
+  is_peg: true, is_recipe: false, party_only: false, is_local_purchase: false, track_inventory: true, food_type: '', purchase_price: 0, selling_price: 0, peg_price: 0, opening_stock: 0, active: true,
 };
 
 const SUB_OPTIONS: Record<string, string[]> = {
   alcohol: ['Whisky', 'Rum', 'Vodka', 'Gin', 'Brandy', 'Wine', 'Beer'],
   'soft drinks': ['Juices', 'Soda', 'Water'],
-  food: ['Packed', 'Veg', 'Non-Veg'],
+  'kitchen / food': ['Veg', 'Non-Veg'],
+  food: ['Veg', 'Non-Veg'],
 };
 
 export default function Products() {
@@ -24,10 +25,55 @@ export default function Products() {
   const [catEd, setCatEd] = useState<any>(null);
   const [recipeEd, setRecipeEd] = useState<{ product: any; rows: { ingredient_id: string; qty: string; display_qty: string; display_unit: string }[] } | null>(null);
   const [recipeBusy, setRecipeBusy] = useState(false);
+  const [variantEd, setVariantEd] = useState<{ product: any; rows: { id?: number; name: string; portion_label: string; selling_price: string; active: boolean }[] } | null>(null);
+  const [variantBusy, setVariantBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('ALL');
 
-  const rawIngredients = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase && p.active), [products]);
+  const rawIngredients = useMemo(() => products.filter((p) => !p.is_recipe && !p.is_local_purchase && p.track_inventory !== false && p.active), [products]);
+
+  const openVariantEditor = (p: any) => {
+    const existing = Array.isArray(p.variants) ? p.variants : [];
+    setVariantEd({
+      product: p,
+      rows: existing.map((v: any) => ({
+        id: v.id,
+        name: String(v.name || ''),
+        portion_label: String(v.portion_label || ''),
+        selling_price: String(v.selling_price ?? 0),
+        active: v.active !== false,
+      })),
+    });
+  };
+
+  const saveVariants = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!variantEd) return;
+    setVariantBusy(true);
+    try {
+      const variants = variantEd.rows
+        .filter((r) => r.name.trim())
+        .map((r, idx) => ({
+          ...(r.id ? { id: r.id } : {}),
+          name: r.name.trim(),
+          portion_label: r.portion_label.trim() || null,
+          selling_price: Number(r.selling_price) || 0,
+          sort: idx + 1,
+          active: r.active,
+        }));
+      await api(`/products/${variantEd.product.id}/variants`, {
+        method: 'PUT',
+        body: { variants },
+      });
+      toast(`✔ Variants updated for ${variantEd.product.name}`);
+      setVariantEd(null);
+      load();
+    } catch (err: any) {
+      toast(err.message || 'Could not save variants', 'error');
+    } finally {
+      setVariantBusy(false);
+    }
+  };
 
   const openRecipeEditor = (p: any) => {
     const existing = Array.isArray(p.recipe) ? p.recipe : [];
@@ -108,7 +154,10 @@ export default function Products() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     const fd = new FormData();
-    Object.entries(ed).forEach(([k, v]) => v != null && fd.append(k, String(v)));
+    Object.entries(ed).forEach(([k, v]) => {
+      if (v == null || k === 'variants' || k === 'recipe') return;
+      fd.append(k, String(v));
+    });
     if (file) fd.append('image', file);
     try {
       await api(ed.id ? `/products/${ed.id}` : '/products', { method: ed.id ? 'PUT' : 'POST', body: fd });
@@ -271,12 +320,33 @@ export default function Products() {
                     ) : money(p.purchase_price)}
                   </td>
                   <td className="font-bold text-[#422AFB] dark:text-[#818CF8]">
-                    {p.is_local_purchase ? `Cost + ${p.local_margin_pct ?? 10}%` : money(p.selling_price)}
+                    {p.is_local_purchase ? (
+                      `Cost + ${p.local_margin_pct ?? 10}%`
+                    ) : (p.variants || []).filter((v: any) => v.active).length > 1 ? (
+                      <div className="space-y-0.5">
+                        {(p.variants || []).filter((v: any) => v.active).map((v: any) => (
+                          <div key={v.id} className="text-xs font-bold">
+                            <span className="text-[#707EAE] dark:text-[#94A3B8]">{v.name}:</span> {money(v.selling_price)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div>
+                        <div>{money(p.selling_price)}</div>
+                        {(p.variants || []).filter((v: any) => v.active).length === 1 && (
+                          <div className="text-[10px] font-medium text-[#94A3B8]">
+                            {p.variants.find((v: any) => v.active)?.display_label}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td>{p.is_peg ? money(p.peg_price) : '—'}</td>
                   <td>
                     {p.is_local_purchase ? (
                       <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">On-demand (no stock)</span>
+                    ) : p.track_inventory === false && !p.is_recipe ? (
+                      <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Untracked (Kitchen)</span>
                     ) : (
                       <>
                         <StockDot s={p.stock_status} label={`${p.stock_display} ${p.stock_unit}`} />
@@ -293,11 +363,16 @@ export default function Products() {
                   </td>
                   <td className="space-x-1 whitespace-nowrap text-right">
                     {!p.is_peg && !p.is_local_purchase && (
-                      <Button size="sm" variant={p.is_recipe ? 'primary' : 'ghost'} onClick={() => openRecipeEditor(p)}>
-                        🧪 Recipe
-                      </Button>
+                      <>
+                        <Button size="sm" variant={(p.variants || []).length > 0 ? 'subtle' : 'ghost'} onClick={() => openVariantEditor(p)}>
+                          🎛 Variants{(p.variants || []).length > 0 ? ` (${p.variants.length})` : ''}
+                        </Button>
+                        <Button size="sm" variant={p.is_recipe ? 'primary' : 'ghost'} onClick={() => openRecipeEditor(p)}>
+                          🧪 Recipe
+                        </Button>
+                      </>
                     )}
-                    <Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, sub_category: p.sub_category ?? '', food_type: p.food_type ?? '' }); }}>Edit</Button>
+                    <Button size="sm" variant="subtle" onClick={() => { setFile(null); setEd({ ...p, sub_category: p.sub_category ?? '', food_type: p.food_type ?? '', track_inventory: p.track_inventory !== false }); }}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => del(p.id)}>✕</Button>
                   </td>
                 </tr>
@@ -373,20 +448,26 @@ export default function Products() {
                 <Input type="number" step="0.01" value={ed.peg_price} onChange={(e) => setEd({ ...ed, peg_price: e.target.value })} />
               </Field>
             )}
-            {!ed.id && !ed.is_recipe && !ed.is_local_purchase && <Field label="Opening stock (bottles/units)"><Input type="number" step="0.01" value={ed.opening_stock} onChange={(e) => setEd({ ...ed, opening_stock: e.target.value })} /></Field>}
+            {!ed.id && !ed.is_recipe && !ed.is_local_purchase && ed.track_inventory !== false && <Field label="Opening stock (bottles/packets/units)"><Input type="number" step="0.01" value={ed.opening_stock} onChange={(e) => setEd({ ...ed, opening_stock: e.target.value })} /></Field>}
             {ed.is_recipe && (
               <div className="rounded-xl bg-[#422AFB]/10 p-3 text-xs font-medium text-[#1B2559] dark:bg-[#6366F1]/15 dark:text-[#E6EDF3] sm:col-span-3">
-                🍹 Recipe-based drink: ingredient cost and available quantity are computed dynamically from the configured recipe ingredients. Click <b>🧪 Recipe</b> after saving to configure ingredients.
+                🍹 Recipe-based product: ingredient cost and available quantity are computed dynamically from the configured recipe ingredients. Click <b>🧪 Recipe</b> after saving to configure ingredients.
               </div>
             )}
             {ed.is_local_purchase && (
-              <div className="rounded-xl bg-emerald-500/12 p-3 text-xs font-medium text-emerald-800 dark:bg-emerald-300 sm:col-span-3">
+              <div className="rounded-xl bg-emerald-500/12 p-3 text-xs font-medium text-emerald-800 dark:text-emerald-300 sm:col-span-3">
                 🛒 Local Purchase (Miscellaneous): No fixed price or stocked inventory. Bartender enters purchase cost at order time and selling price is auto-calculated using the <b>Miscellaneous</b> category profit margin (default 10%).
               </div>
             )}
             <Field label="Product image"><Input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} /></Field>
             <div className="sm:col-span-2"><Field label="Description"><Input value={ed.description || ''} onChange={(e) => setEd({ ...ed, description: e.target.value })} /></Field></div>
             <div className="flex flex-wrap items-center gap-4 sm:col-span-3">
+              {!ed.is_local_purchase && !ed.is_recipe && (
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={ed.track_inventory !== false} onChange={(e) => setEd({ ...ed, track_inventory: e.target.checked })} />
+                  📦 Track Inventory (deduct stock on sale &amp; check availability)
+                </label>
+              )}
               {!ed.is_local_purchase && (
                 <label className="flex items-center gap-2 text-sm font-semibold">
                   <input type="checkbox" checked={!!ed.party_only} onChange={(e) => setEd({ ...ed, party_only: e.target.checked })} />
@@ -547,6 +628,92 @@ export default function Products() {
             </form>
           );
         })()}
+      </Modal>
+
+      <Modal open={!!variantEd} onClose={() => setVariantEd(null)} title={variantEd ? `Manage Variants · ${variantEd.product.name}` : 'Variants'} wide>
+        {variantEd && (
+          <form onSubmit={saveVariants} className="space-y-4">
+            <p className="text-xs text-[#707EAE] dark:text-[#94A3B8]">
+              Configure serving sizes and variants (e.g. Half Plate, Full Plate, Regular / Masala) under a single product record without creating duplicate products.
+            </p>
+            <div className="space-y-2.5">
+              {variantEd.rows.map((row, idx) => (
+                <div key={idx} className="grid grid-cols-1 items-end gap-2 rounded-2xl border border-[#E9EDF7] p-3 dark:border-[#2A3346] sm:grid-cols-12">
+                  <div className="sm:col-span-4">
+                    <Field label="Variant Name *">
+                      <Input
+                        value={row.name}
+                        placeholder="e.g. Half Plate / Masala Peanuts"
+                        onChange={(e) => setVariantEd({ ...variantEd, rows: variantEd.rows.map((r, i) => (i === idx ? { ...r, name: e.target.value } : r)) })}
+                        required
+                      />
+                    </Field>
+                  </div>
+                  <div className="sm:col-span-3">
+                    <Field label="Serving / Quantity">
+                      <Input
+                        value={row.portion_label}
+                        placeholder="e.g. Full Plate – 250 gm"
+                        onChange={(e) => setVariantEd({ ...variantEd, rows: variantEd.rows.map((r, i) => (i === idx ? { ...r, portion_label: e.target.value } : r)) })}
+                      />
+                    </Field>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <Field label="Selling Price (₹) *">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        value={row.selling_price}
+                        onChange={(e) => setVariantEd({ ...variantEd, rows: variantEd.rows.map((r, i) => (i === idx ? { ...r, selling_price: e.target.value } : r)) })}
+                        required
+                      />
+                    </Field>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 sm:col-span-3">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold">
+                      <input
+                        type="checkbox"
+                        checked={row.active}
+                        onChange={(e) => setVariantEd({ ...variantEd, rows: variantEd.rows.map((r, i) => (i === idx ? { ...r, active: e.target.checked } : r)) })}
+                      />
+                      Active
+                    </label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setVariantEd({ ...variantEd, rows: variantEd.rows.filter((_, i) => i !== idx) })}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {variantEd.rows.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-[#E0E5F2] py-6 text-center text-xs text-[#94A3B8] dark:border-[#2E384D]">
+                  No variants configured — this product will use its standard single selling price ({money(variantEd.product.selling_price)}).
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <Button
+                type="button"
+                variant="subtle"
+                onClick={() => setVariantEd({
+                  ...variantEd,
+                  rows: [...variantEd.rows, { name: '', portion_label: '', selling_price: String(variantEd.product.selling_price || 0), active: true }],
+                })}
+              >
+                + Add Variant
+              </Button>
+              <div className="flex gap-2">
+                <Button type="button" variant="ghost" onClick={() => setVariantEd(null)}>Cancel</Button>
+                <Button disabled={variantBusy}>{variantBusy ? 'Saving…' : 'Save Variants'}</Button>
+              </div>
+            </div>
+          </form>
+        )}
       </Modal>
 
       <Modal open={!!catEd} onClose={() => setCatEd(null)} title={catEd?.id ? 'Edit Category' : 'New Category'}>

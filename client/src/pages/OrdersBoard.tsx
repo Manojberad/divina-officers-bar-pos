@@ -5,15 +5,17 @@ import { Badge, Button, Card, DateRange, Empty, Field, Input, Modal, Select, Tex
 
 export const itemLabel = (i: any) =>
   `${i.qty} × ${i.name}${
-    i.serve_type === 'peg'
-      ? i.peg_ml === 30
-        ? ' (Small 30 ml)'
-        : i.peg_ml === 60
-          ? ' (Large 60 ml)'
-          : ` (${i.peg_ml} ml)`
-      : i.serve_type === 'bottle'
-        ? ' (Full Bottle)'
-        : ''
+    i.variant_name
+      ? ` (${i.variant_name})`
+      : i.serve_type === 'peg'
+        ? i.peg_ml === 30
+          ? ' (Small 30 ml)'
+          : i.peg_ml === 60
+            ? ' (Large 60 ml)'
+            : ` (${i.peg_ml} ml)`
+        : i.serve_type === 'bottle'
+          ? ' (Full Bottle)'
+          : ''
   }`;
 
 function statusDisplay(o: any) {
@@ -168,6 +170,7 @@ export default function OrdersBoard() {
   const [editReason, setEditReason] = useState('');
   const [addProdId, setAddProdId] = useState('');
   const [addServe, setAddServe] = useState<'peg30' | 'peg60' | 'bottle' | 'unit'>('peg30');
+  const [addVariantId, setAddVariantId] = useState('');
 
   // Cancel Order Modal
   const [cancelTarget, setCancelTarget] = useState<any>(null);
@@ -244,6 +247,8 @@ export default function OrdersBoard() {
       name: i.name,
       serve_type: i.serve_type,
       peg_ml: i.peg_ml,
+      variant_id: i.variant_id || null,
+      variant_name: i.variant_name || null,
       qty: i.qty,
       unit_price: i.unit_price,
       ...(i.purchase_cost != null ? { purchase_cost: i.purchase_cost } : {}),
@@ -251,6 +256,7 @@ export default function OrdersBoard() {
     setEditNotes(o.notes || '');
     setEditReason('');
     setAddProdId('');
+    setAddVariantId('');
   };
 
   const addEditLine = () => {
@@ -259,17 +265,28 @@ export default function OrdersBoard() {
     let serve_type = 'unit';
     let peg_ml: number | null = null;
     let unit_price = p.selling_price;
+    let variant_id: number | null = null;
+    let variant_name: string | null = null;
     if (p.is_peg) {
       if (addServe === 'bottle') { serve_type = 'bottle'; unit_price = p.selling_price; }
       else if (addServe === 'peg60') { serve_type = 'peg'; peg_ml = 60; unit_price = Math.round(p.peg_price * 2 * 100) / 100; }
       else { serve_type = 'peg'; peg_ml = 30; unit_price = p.peg_price; }
+    } else {
+      const activeVars = (p.variants || []).filter((v: any) => v.active);
+      if (activeVars.length > 0) {
+        const chosen = activeVars.find((v: any) => String(v.id) === addVariantId) || activeVars[0];
+        variant_id = chosen.id;
+        variant_name = chosen.display_label || chosen.name;
+        unit_price = Number(chosen.selling_price) || 0;
+      }
     }
     setEditItems((prev) => {
-      const idx = prev.findIndex((l) => l.product_id === p.id && l.serve_type === serve_type && (l.peg_ml || null) === peg_ml);
+      const idx = prev.findIndex((l) => l.product_id === p.id && l.serve_type === serve_type && (l.peg_ml || null) === peg_ml && (l.variant_id || null) === variant_id);
       if (idx >= 0) return prev.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l));
-      return [...prev, { product_id: p.id, name: p.name, serve_type, peg_ml, qty: 1, unit_price }];
+      return [...prev, { product_id: p.id, name: p.name, serve_type, peg_ml, variant_id, variant_name, qty: 1, unit_price }];
     });
     setAddProdId('');
+    setAddVariantId('');
   };
 
   const saveEditOrder = async (e: React.FormEvent) => {
@@ -281,7 +298,9 @@ export default function OrdersBoard() {
         method: 'PUT',
         body: {
           items: editItems.map((l) => ({
-            product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml, qty: l.qty,
+            product_id: l.product_id, serve_type: l.serve_type, peg_ml: l.peg_ml,
+            ...(l.variant_id ? { variant_id: l.variant_id, variant_name: l.variant_name } : {}),
+            qty: l.qty,
             ...(l.purchase_cost != null ? { purchase_cost: l.purchase_cost } : {}),
           })),
           notes: editNotes,
@@ -662,7 +681,14 @@ export default function OrdersBoard() {
             <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-[#E9EDF7] p-3 dark:border-[#2A3346]">
               <div className="min-w-[200px] flex-1">
                 <Field label="Add / Substitute Item">
-                  <Select value={addProdId} onChange={(e) => { setAddProdId(e.target.value); setAddServe('peg30'); }}>
+                  <Select value={addProdId} onChange={(e) => {
+                    const pid = e.target.value;
+                    setAddProdId(pid);
+                    setAddServe('peg30');
+                    const found = products.find((x) => String(x.id) === pid);
+                    const firstVar = (found?.variants || []).find((v: any) => v.active);
+                    setAddVariantId(firstVar ? String(firstVar.id) : '');
+                  }}>
                     <option value="">Choose product…</option>
                     {products.filter((p) => p.active).map((p) => (
                       <option key={p.id} value={p.id}>{p.name} ({p.is_peg ? `${money(p.peg_price)}/30ml` : money(p.selling_price)})</option>
@@ -677,6 +703,17 @@ export default function OrdersBoard() {
                       <option value="peg30">Small (30 ml)</option>
                       <option value="peg60">Large (60 ml)</option>
                       <option value="bottle">Full Bottle</option>
+                    </Select>
+                  </Field>
+                </div>
+              )}
+              {!selAddProd?.is_peg && (selAddProd?.variants || []).filter((v: any) => v.active).length > 0 && (
+                <div className="w-48">
+                  <Field label="Variant">
+                    <Select value={addVariantId} onChange={(e) => setAddVariantId(e.target.value)}>
+                      {(selAddProd.variants || []).filter((v: any) => v.active).map((v: any) => (
+                        <option key={v.id} value={String(v.id)}>{v.display_label || v.name} ({money(v.selling_price)})</option>
+                      ))}
                     </Select>
                   </Field>
                 </div>

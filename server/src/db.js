@@ -483,6 +483,173 @@ const migrations = [
   ALTER TABLE orders ADD COLUMN shift_id INTEGER REFERENCES shifts(id);
   CREATE INDEX IF NOT EXISTS idx_orders_shift ON orders(shift_id);
   `,
+  // v15: Product Variants, per-product inventory tracking toggle, Packed Snacks & Kitchen / Food catalogue
+  `
+  ALTER TABLE products ADD COLUMN track_inventory INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE IF NOT EXISTS product_variants(
+    id INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    portion_label TEXT,
+    selling_price REAL NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(product_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
+
+  ALTER TABLE order_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id);
+  ALTER TABLE order_items ADD COLUMN variant_name TEXT;
+
+  -- Rename Food -> Kitchen / Food and create separate Packed Snacks category
+  UPDATE categories SET name = 'Kitchen / Food' WHERE name = 'Food'
+    AND NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Kitchen / Food');
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin)
+    VALUES('Packed Snacks', 10, 4, 4, 10);
+  INSERT OR IGNORE INTO categories(name, low_threshold, critical_threshold, sort, profit_margin)
+    VALUES('Kitchen / Food', 10, 4, 5, 10);
+
+  UPDATE categories SET sort = 1 WHERE name = 'Alcohol';
+  UPDATE categories SET sort = 2 WHERE name = 'Mocktails';
+  UPDATE categories SET sort = 3 WHERE name = 'Soft Drinks';
+  UPDATE categories SET sort = 4 WHERE name = 'Packed Snacks';
+  UPDATE categories SET sort = 5 WHERE name = 'Kitchen / Food';
+  UPDATE categories SET sort = 6 WHERE name = 'Cigarettes';
+  UPDATE categories SET sort = 7 WHERE name = 'Miscellaneous';
+
+  -- Move existing packed snacks (e.g. SNACKS 60 GM) into Packed Snacks category
+  UPDATE products
+    SET category_id = (SELECT id FROM categories WHERE name = 'Packed Snacks'),
+        sub_category = NULL,
+        food_type = NULL,
+        track_inventory = 1
+    WHERE category_id = (SELECT id FROM categories WHERE name = 'Kitchen / Food')
+      AND sub_category = 'Packed';
+
+  -- Seed the 7 Packed Snacks on existing station DBs (idempotent, packet-tracked inventory)
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Cream & Onion Wafers', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Crispy cream & onion potato wafers', '/uploads/snack-cream-onion-wafers.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 20, 0, 20, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'CREAM & ONION WAFERS');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Salted Wafers', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Classic lightly salted potato wafers', '/uploads/snack-salted-wafers.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 20, 0, 20, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SALTED WAFERS');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Salted Peanuts', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Roasted & lightly salted peanuts', '/uploads/prod-roasted-peanuts.jpg', 0, 'packet', 0, 0, 0, 0, 1, 0, 40, 0, 20, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SALTED PEANUTS');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Singh Bhujia', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Crispy spiced singh bhujia', '/uploads/snack-singh-bhujia.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 20, 0, 20, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SINGH BHUJIA');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Masala Wafers', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Spicy Indian masala potato wafers', '/uploads/snack-masala-wafers.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 10, 0, 20, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'MASALA WAFERS');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Masala Singh Bhujia', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Tangy masala singh bhujia', '/uploads/snack-masala-singh-bhujia.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 20, 0, 20, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'MASALA SINGH BHUJIA');
+
+  INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Moong Dal', (SELECT id FROM categories WHERE name = 'Packed Snacks'), NULL, 'Packed Snacks', '1 Packet · Crispy salted fried moong dal', '/uploads/snack-moong-dal.svg', 0, 'packet', 0, 0, 0, 0, 1, 0, 10, 0, 20, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'MOONG DAL');
+
+  INSERT INTO stock_movements(product_id, type, qty, unit_cost, note, at)
+  SELECT id, 'opening', stock, purchase_price, 'Opening Stock: ' || CAST(stock AS INT) || ' packet(s)', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM products
+  WHERE upper(name) IN ('CREAM & ONION WAFERS','SALTED WAFERS','SALTED PEANUTS','SINGH BHUJIA','MASALA WAFERS','MASALA SINGH BHUJIA','MOONG DAL')
+    AND stock > 0
+    AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_id = products.id);
+
+  -- Seed the 11 Kitchen / Food products (track_inventory = 0 initially; configurable variants & future recipes)
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Mix Veg Pakoda', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Fresh assorted vegetable fritters · Half / Full Plate', '/uploads/kitchen-mix-veg-pakoda.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 50, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'MIX VEG PAKODA');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Peanuts', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Full Plate – 250 gm · Regular or Masala Peanuts', '/uploads/prod-roasted-peanuts.jpg', 0, 'plate', 0, 0, 0, 0, 0, 0, 80, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'PEANUTS');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Maggi', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Hot masala noodles · Regular or Two Egg Maggi', '/uploads/kitchen-maggi.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 30, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'MAGGI');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Chicken Snacks', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Non-Veg', 'nonveg', 'Kitchen', '250 gm · Crispy bar-style chicken snacks', '/uploads/real-chicken-crispy-fry.jpg', 0, 'plate', 0, 0, 0, 0, 0, 0, 150, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'CHICKEN SNACKS');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Paneer Snacks', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', '250 gm · Spiced cottage cheese starter', '/uploads/real-veggi-paneer-pops.jpg', 0, 'plate', 0, 0, 0, 0, 0, 0, 140, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'PANEER SNACKS');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'French Fries', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Full Plate – 400 gm · Crispy golden fries', '/uploads/real-french-fry.jpg', 0, 'plate', 0, 0, 0, 0, 0, 0, 160, 0, 0, 1, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'FRENCH FRIES');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Paneer Pakoda', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Full Plate – 400 gm · Golden gram-flour battered paneer', '/uploads/kitchen-paneer-pakoda.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 220, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'PANEER PAKODA');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Egg Bhurji', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Non-Veg', 'nonveg', 'Kitchen', '2 Eggs · 1 Plate · Spiced Indian scrambled eggs', '/uploads/kitchen-egg-bhurji.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'EGG BHURJI');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Egg Omelette', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Non-Veg', 'nonveg', 'Kitchen', '2 Eggs · 1 Plate · Fluffy masala omelette', '/uploads/kitchen-egg-omelette.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'EGG OMELETTE');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Boiled Eggs', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Non-Veg', 'nonveg', 'Kitchen', '2 Eggs · 1 Plate · Served with salt & pepper', '/uploads/kitchen-boiled-eggs.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'BOILED EGGS');
+
+  INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+  SELECT 'Green Salad', (SELECT id FROM categories WHERE name = 'Kitchen / Food'), 'Veg', 'veg', 'Kitchen', 'Fresh cucumber, tomato, onion & lemon · Half / Full Plate', '/uploads/kitchen-green-salad.svg', 0, 'plate', 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 1
+  WHERE EXISTS (SELECT 1 FROM products WHERE upper(name) = 'SOFT 250 ML') AND NOT EXISTS (SELECT 1 FROM products WHERE upper(name) = 'GREEN SALAD');
+
+  -- Seed product_variants for Kitchen / Food items (no duplicate product records!)
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Half Plate', 'Half Plate', 50, 1, 1 FROM products WHERE upper(name) = 'MIX VEG PAKODA';
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Full Plate', 'Full Plate', 80, 2, 1 FROM products WHERE upper(name) = 'MIX VEG PAKODA';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Regular Peanuts', 'Full Plate – 250 gm', 80, 1, 1 FROM products WHERE upper(name) = 'PEANUTS';
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Masala Peanuts', 'Full Plate – 250 gm', 80, 2, 1 FROM products WHERE upper(name) = 'PEANUTS';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Regular Maggi', '1 Plate', 30, 1, 1 FROM products WHERE upper(name) = 'MAGGI';
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Two Egg Maggi', '1 Plate', 50, 2, 1 FROM products WHERE upper(name) = 'MAGGI';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Chicken Snacks', '250 gm', 150, 1, 1 FROM products WHERE upper(name) = 'CHICKEN SNACKS';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Paneer Snacks', '250 gm', 140, 1, 1 FROM products WHERE upper(name) = 'PANEER SNACKS';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Full Plate', '400 gm', 160, 1, 1 FROM products WHERE upper(name) = 'FRENCH FRIES' AND track_inventory = 0;
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Full Plate', '400 gm', 220, 1, 1 FROM products WHERE upper(name) = 'PANEER PAKODA';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, '2 Eggs', '1 Plate', 30, 1, 1 FROM products WHERE upper(name) = 'EGG BHURJI';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, '2 Eggs', '1 Plate', 35, 1, 1 FROM products WHERE upper(name) = 'EGG OMELETTE';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, '2 Eggs', '1 Plate', 20, 1, 1 FROM products WHERE upper(name) = 'BOILED EGGS';
+
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Half Plate', 'Half Plate', 30, 1, 1 FROM products WHERE upper(name) = 'GREEN SALAD';
+  INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active)
+  SELECT id, 'Full Plate', 'Full Plate', 50, 2, 1 FROM products WHERE upper(name) = 'GREEN SALAD';
+  `,
 ];
 
 export function migrate() {
@@ -534,7 +701,7 @@ export function getSettings() {
 }
 
 export const ALL_TABLES = [
-  'users', 'user_sessions', 'shifts', 'categories', 'products', 'product_recipes', 'tables', 'orders', 'order_items', 'order_events',
+  'users', 'user_sessions', 'shifts', 'categories', 'products', 'product_variants', 'product_recipes', 'tables', 'orders', 'order_items', 'order_events',
   'recipe_consumptions', 'misc_transactions', 'stock_movements', 'reconciliations', 'favorite_orders', 'settings', 'audit_logs', 'notifications',
 ];
 

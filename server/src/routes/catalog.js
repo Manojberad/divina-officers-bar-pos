@@ -98,6 +98,8 @@ r.get('/products', optionalAuth, (req, res) => {
 export const publicView = (p) => ({
   id: p.id, name: p.name, category: p.category, category_id: p.category_id, sub_category: p.sub_category || null, brand: p.brand, description: p.description, image: p.image,
   size_ml: p.size_ml, unit: p.unit, is_peg: p.is_peg, party_only: !!p.party_only, is_local_purchase: !!p.is_local_purchase,
+  track_inventory: p.track_inventory !== false,
+  variants: (p.variants || []).filter((v) => v.active),
   food_type: p.food_type || null, selling_price: p.selling_price, peg_price: p.peg_price,
   favourite: p.favourite, available: p.stock_status !== 'out', active: p.active,
 });
@@ -108,7 +110,7 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
   const prodRows = [
     {
       Name: 'Paneer Tikka',
-      Category: 'Food',
+      Category: 'Kitchen / Food',
       'Sub Category': 'Veg',
       'Food Type': 'Veg',
       Brand: 'Kitchen',
@@ -125,7 +127,7 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
     },
     {
       Name: 'Mutton Seekh Kebab',
-      Category: 'Food',
+      Category: 'Kitchen / Food',
       'Sub Category': 'Non-Veg',
       'Food Type': 'Non-Veg',
       Brand: 'Kitchen',
@@ -160,10 +162,12 @@ r.get('/products/template', requireRole('admin'), (_req, res) => {
   ];
   const catRows = [
     { Name: 'Alcohol', 'Profit Margin (%)': 5, Sort: 1 },
-    { Name: 'Soft Drinks', 'Profit Margin (%)': 10, Sort: 2 },
-    { Name: 'Food', 'Profit Margin (%)': 10, Sort: 3 },
-    { Name: 'Cigarettes', 'Profit Margin (%)': 7.5, Sort: 4 },
-    { Name: 'Misc', 'Profit Margin (%)': 0, Sort: 5 },
+    { Name: 'Mocktails', 'Profit Margin (%)': 10, Sort: 2 },
+    { Name: 'Soft Drinks', 'Profit Margin (%)': 10, Sort: 3 },
+    { Name: 'Packed Snacks', 'Profit Margin (%)': 10, Sort: 4 },
+    { Name: 'Kitchen / Food', 'Profit Margin (%)': 10, Sort: 5 },
+    { Name: 'Cigarettes', 'Profit Margin (%)': 7.5, Sort: 6 },
+    { Name: 'Miscellaneous', 'Profit Margin (%)': 10, Sort: 7 },
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodRows), 'Products');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), 'Categories');
@@ -179,8 +183,9 @@ r.post('/products/import', requireRole('admin'), sheetUpload.single('file'), (re
 
   const normRow = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k.toLowerCase().replace(/[^a-z0-9]/g, ''), v]));
   const ensureCat = (name, low = null, crit = null, sort = null) => {
-    const clean = String(name || '').trim();
+    let clean = String(name || '').trim();
     if (!clean) return null;
+    if (/^food$/i.test(clean)) clean = 'Kitchen / Food';
     const existing = q.get('SELECT id FROM categories WHERE name=? COLLATE NOCASE', clean);
     if (existing) {
       if (low != null || crit != null || sort != null) {
@@ -268,6 +273,73 @@ r.get('/products/:id', requireRole('admin', 'bartender'), (req, res) => {
   res.json(decorate(p));
 });
 
+function parseVariantsInput(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  let arr = raw;
+  if (typeof raw === 'string') {
+    try { arr = JSON.parse(raw); } catch { throw Object.assign(new Error('Invalid variants JSON'), { status: 400 }); }
+  }
+  if (!Array.isArray(arr)) throw Object.assign(new Error('Variants must be a list'), { status: 400 });
+  const seen = new Set();
+  return arr.map((v, i) => {
+    const name = String(v?.name || '').trim();
+    if (!name) throw Object.assign(new Error('Each variant must have a name'), { status: 400 });
+    const key = name.toLowerCase();
+    if (seen.has(key)) throw Object.assign(new Error(`Duplicate variant name: ${name}`), { status: 400 });
+    seen.add(key);
+    const price = Number(v?.selling_price);
+    if (isNaN(price) || price < 0) throw Object.assign(new Error(`Invalid selling price for variant ${name}`), { status: 400 });
+    return {
+      id: v?.id ? Number(v.id) : null,
+      name,
+      portion_label: v?.portion_label ? String(v.portion_label).trim() : null,
+      selling_price: Math.round(price * 100) / 100,
+      sort: v?.sort != null && !isNaN(Number(v.sort)) ? Number(v.sort) : i + 1,
+      active: v?.active === false || v?.active === 0 || v?.active === '0' || v?.active === 'false' ? 0 : 1,
+    };
+  });
+}
+
+function syncProductVariants(productId, variants) {
+  if (variants === null) return;
+  const existing = q.all('SELECT id, name FROM product_variants WHERE product_id=?', productId);
+  const keepIds = new Set();
+
+  for (const v of variants) {
+    const match = (v.id ? existing.find((e) => e.id === v.id) : null)
+      || existing.find((e) => e.name.toLowerCase() === v.name.toLowerCase());
+    if (match) {
+      q.run(
+        'UPDATE product_variants SET name=?, portion_label=?, selling_price=?, sort=?, active=? WHERE id=?',
+        v.name, v.portion_label, v.selling_price, v.sort, v.active, match.id,
+      );
+      keepIds.add(match.id);
+    } else {
+      const nid = Number(
+        q.run(
+          'INSERT INTO product_variants(product_id, name, portion_label, selling_price, sort, active) VALUES(?,?,?,?,?,?)',
+          productId, v.name, v.portion_label, v.selling_price, v.sort, v.active,
+        ).lastInsertRowid,
+      );
+      keepIds.add(nid);
+    }
+  }
+
+  for (const ex of existing) {
+    if (keepIds.has(ex.id)) continue;
+    const used = q.get('SELECT COUNT(*) n FROM order_items WHERE variant_id=?', ex.id).n;
+    if (used > 0) q.run('UPDATE product_variants SET active=0 WHERE id=?', ex.id);
+    else q.run('DELETE FROM product_variants WHERE id=?', ex.id);
+  }
+
+  // Keep product base selling_price in sync with minimum active variant price when variants exist
+  const activePrices = q.all('SELECT selling_price FROM product_variants WHERE product_id=? AND active=1', productId);
+  if (activePrices.length > 0) {
+    const minPrice = Math.min(...activePrices.map((x) => Number(x.selling_price) || 0));
+    q.run('UPDATE products SET selling_price=? WHERE id=?', minPrice, productId);
+  }
+}
+
 function productFields(b) {
   let subCat = b.sub_category ? String(b.sub_category).trim() : null;
   let foodType = parseFoodType(b.food_type);
@@ -280,10 +352,12 @@ function productFields(b) {
   const isRecipe = isLocal ? 0 : toBit(b.is_recipe);
   const isPeg = isRecipe || isLocal ? 0 : toBit(b.is_peg);
   const partyOnly = toBit(b.party_only);
+  const trackInventory = isLocal ? 0 : isRecipe ? 1
+    : (b.track_inventory === false || b.track_inventory === '0' || b.track_inventory === 0 || b.track_inventory === 'false' ? 0 : 1);
   return [
     b.name?.trim(), numOrNull(b.category_id), subCat, b.brand || null, b.description || null,
     isRecipe || isLocal ? 0 : (Number(b.size_ml) || 0), b.unit || (isRecipe ? 'glass' : isLocal ? 'unit' : 'bottle'),
-    isPeg, isRecipe, partyOnly, isLocal,
+    isPeg, isRecipe, partyOnly, isLocal, trackInventory,
     isLocal ? 0 : (Number(b.purchase_price) || 0),
     isLocal ? 0 : (Number(b.selling_price) || 0),
     isPeg ? (Number(b.peg_price) || 0) : 0,
@@ -296,14 +370,19 @@ r.post('/products', requireRole('admin'), imageUpload.single('image'), (req, res
   if (!b.name?.trim()) return res.status(400).json({ error: 'Name required' });
   const f = productFields(b);
   if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
-  const id = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
-  const opening = f[8] || f[10] ? 0 : (Number(b.opening_stock) || 0);
-  if (opening > 0) {
-    const p = getProduct(id);
-    moveStock({ productId: id, type: 'opening', qty: toBase(p, opening), unitCost: baseCost(p), userId: req.user.id, note: 'Opening stock' });
-  }
-  audit(req.user.id, 'product.create', 'product', id, { name: b.name, is_recipe: !!f[8], party_only: !!f[9], is_local_purchase: !!f[10] });
+  const parsedVariants = parseVariantsInput(b.variants);
+  const id = tx(() => {
+    const pid = Number(q.run(`INSERT INTO products(name, category_id, sub_category, brand, description, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, min_stock, critical_stock, food_type, image, stock)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...f, req.file ? `/uploads/${req.file.filename}` : b.image || null).lastInsertRowid);
+    if (parsedVariants !== null) syncProductVariants(pid, parsedVariants);
+    const opening = f[8] || f[10] || !f[11] ? 0 : (Number(b.opening_stock) || 0);
+    if (opening > 0) {
+      const p = getProduct(pid);
+      moveStock({ productId: pid, type: 'opening', qty: toBase(p, opening), unitCost: baseCost(p), userId: req.user.id, note: 'Opening stock' });
+    }
+    return pid;
+  });
+  audit(req.user.id, 'product.create', 'product', id, { name: b.name, is_recipe: !!f[8], party_only: !!f[9], is_local_purchase: !!f[10], track_inventory: !!f[11], variants: parsedVariants?.length || 0 });
   res.status(201).json(decorate(getProduct(id)));
 });
 
@@ -315,13 +394,30 @@ r.put('/products/:id', requireRole('admin'), imageUpload.single('image'), (req, 
   if (f[7] && !(f[5] > 0)) return res.status(400).json({ error: 'Peg-enabled products need a bottle size (ml)' });
   if (!!f[7] !== !!p.is_peg && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing peg mode' });
   if (f[7] && p.is_peg && f[5] !== p.size_ml && p.stock !== 0) return res.status(400).json({ error: 'Set stock to zero before changing bottle size' });
+  const parsedVariants = req.body.variants !== undefined ? parseVariantsInput(req.body.variants) : null;
   const image = req.file ? `/uploads/${req.file.filename}` : b.image;
-  q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, is_recipe=?, party_only=?, is_local_purchase=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
-    ...f, image, b.active === false || b.active === '0' || b.active === 'false' || b.active === 0 ? 0 : 1, p.id);
+  tx(() => {
+    q.run(`UPDATE products SET name=?, category_id=?, sub_category=?, brand=?, description=?, size_ml=?, unit=?, is_peg=?, is_recipe=?, party_only=?, is_local_purchase=?, track_inventory=?, purchase_price=?, selling_price=?, peg_price=?, min_stock=?, critical_stock=?, food_type=?, image=?, active=? WHERE id=?`,
+      ...f, image, b.active === false || b.active === '0' || b.active === 'false' || b.active === 0 ? 0 : 1, p.id);
+    if (parsedVariants !== null) syncProductVariants(p.id, parsedVariants);
+  });
   const priceChange = ['purchase_price', 'selling_price', 'peg_price'].filter((k) => req.body[k] != null && Number(req.body[k]) !== p[k]);
   audit(req.user.id, priceChange.length ? 'product.price_change' : 'product.update', 'product', p.id,
     { changes: Object.fromEntries(Object.keys(req.body).map((k) => [k, { from: p[k], to: req.body[k] }])) });
   res.json(decorate(getProduct(p.id)));
+});
+
+r.put('/products/:id/variants', requireRole('admin'), (req, res) => {
+  const pid = Number(req.params.id);
+  const p = getProduct(pid);
+  if (!p) return res.status(404).json({ error: 'Product not found' });
+  if (p.is_peg) return res.status(400).json({ error: 'Peg-based spirits use Small (30 ml) / Large (60 ml) / Bottle serving modes' });
+  const parsed = parseVariantsInput(req.body?.variants ?? []);
+  tx(() => {
+    syncProductVariants(pid, parsed);
+  });
+  audit(req.user.id, 'product.variants_update', 'product', pid, { variants: parsed });
+  res.json(decorate(getProduct(pid)));
 });
 
 /* ---------- Configurable Recipes (for Mocktails & future composite drinks) ---------- */

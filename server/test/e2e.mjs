@@ -648,7 +648,7 @@ assert.equal((await req(`/api/orders/${gAutoOrd.data.id}/items`, {
 })).status, 409, 'Guest blocked from editing settled order');
 
 // Member edits own unapproved auto-billed order -> succeeds; after approving -> locked (409)
-const foodProd = (await req('/api/products?all=1', { token: adminTok })).data.find((x) => x.category === 'Food' && x.active && x.stock > 2);
+const foodProd = (await req('/api/products?all=1', { token: adminTok })).data.find((x) => (x.category === 'Kitchen / Food' || x.category === 'Food') && x.active && x.stock > 2);
 assert(foodProd, 'Seeded Food item exists for repeat-drinks filtering test');
 const mOrd = await req('/api/orders', {
   method: 'POST', token: memTok,
@@ -767,12 +767,123 @@ const shiftsRep = (await req('/api/reports/shifts', { token: adminTok })).data;
 assert(shiftsRep.rows.some((r) => r.shift_id === sh1.data.id && r.revenue >= 20), 'Shift-wise report captures Shift A sales');
 assert(shiftsRep.rows.some((r) => r.shift_id === sh2.data.id && r.revenue === 40), 'Shift-wise report captures Shift B sales');
 
-console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 16 Reports (JSON + XLSX + PDF)…');
+console.log('6e. Packed Snacks (packet stock tracking) & Kitchen / Food (selectable variants, untracked->optional tracking, reports)…');
+const allCats = (await req('/api/categories', { token: adminTok })).data;
+const packedCatId = allCats.find((c) => c.name === 'Packed Snacks').id;
+const kitchenCatId = allCats.find((c) => c.name === 'Kitchen / Food').id;
+assert(packedCatId && kitchenCatId, 'Packed Snacks and Kitchen / Food categories exist separately');
+
+const wafers = await mkProd({
+  name: 'Cream & Onion Wafers', category_id: packedCatId, unit: 'packet', is_peg: false,
+  track_inventory: true, selling_price: 20, opening_stock: 10,
+});
+const saltedPeanuts = await mkProd({
+  name: 'Salted Peanuts', category_id: packedCatId, unit: 'packet', is_peg: false,
+  track_inventory: true, selling_price: 40, opening_stock: 5,
+});
+const mixPakoda = await mkProd({
+  name: 'Mix Veg Pakoda', category_id: kitchenCatId, sub_category: 'Veg', food_type: 'veg', unit: 'plate',
+  is_peg: false, track_inventory: false, selling_price: 50,
+  variants: [
+    { name: 'Half Plate', portion_label: 'Half Plate', selling_price: 50 },
+    { name: 'Full Plate', portion_label: 'Full Plate', selling_price: 80 },
+  ],
+});
+const maggi = await mkProd({
+  name: 'Maggi', category_id: kitchenCatId, sub_category: 'Veg', food_type: 'veg', unit: 'plate',
+  is_peg: false, track_inventory: false, selling_price: 30,
+  variants: [
+    { name: 'Regular Maggi', portion_label: '1 Plate', selling_price: 30 },
+    { name: 'Two Egg Maggi', portion_label: '1 Plate', selling_price: 50 },
+  ],
+});
+const boiledEggs = await mkProd({
+  name: 'Boiled Eggs', category_id: kitchenCatId, sub_category: 'Non-Veg', food_type: 'nonveg', unit: 'plate',
+  is_peg: false, track_inventory: false, selling_price: 20,
+  variants: [{ name: '2 Eggs', portion_label: '1 Plate', selling_price: 20 }],
+});
+
+assert.equal(mixPakoda.variants.length, 2, 'Mix Veg Pakoda stores 2 variants under 1 product');
+assert.equal(mixPakoda.track_inventory, false, 'Kitchen item starts with inventory tracking off');
+
+// Untracked kitchen items must NOT trigger false out-of-stock alerts
+const alertsAfterKitchen = (await req('/api/inventory/alerts', { token: btTok })).data;
+assert(!alertsAfterKitchen.some((a) => a.id === mixPakoda.id || a.id === maggi.id), 'Untracked kitchen items excluded from stock alerts');
+
+// Multi-variant product requires selecting a variant
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: mixPakoda.id, qty: 1 }] } })).status, 400, 'Multi-variant kitchen product requires variant selection');
+
+// Order 3 Cream & Onion Wafers (₹60) + 1 Half Plate Mix Veg Pakoda (₹50) + 2 Full Plate Mix Veg Pakoda (₹160) + 1 Two Egg Maggi (₹50) + 1 Boiled Eggs (₹20)
+const halfPakoda = mixPakoda.variants.find((v) => v.name === 'Half Plate');
+const fullPakoda = mixPakoda.variants.find((v) => v.name === 'Full Plate');
+const eggMaggi = maggi.variants.find((v) => v.name === 'Two Egg Maggi');
+const skOrd = await req('/api/orders', {
+  method: 'POST', token: btTok,
+  body: {
+    user_id: 3,
+    items: [
+      { product_id: wafers.id, qty: 3 },
+      { product_id: mixPakoda.id, variant_id: halfPakoda.id, qty: 1 },
+      { product_id: mixPakoda.id, variant_id: fullPakoda.id, qty: 2 },
+      { product_id: maggi.id, variant_id: eggMaggi.id, qty: 1 },
+      { product_id: boiledEggs.id, qty: 1 }, // single variant auto-selected
+    ],
+  },
+});
+assert.equal(skOrd.status, 201);
+assert.equal(skOrd.data.total, 340, '3*20 + 50 + 2*80 + 50 + 20 = 340');
+assert.equal(stockOf(wafers.id), 7, 'Packed Snacks deducted exactly 3 packets (10 -> 7)');
+assert.equal(q.get('SELECT COUNT(*) n FROM stock_movements WHERE product_id IN (?,?,?)', mixPakoda.id, maggi.id, boiledEggs.id).n, 0, 'Untracked kitchen items do not invent stock movements');
+assert.equal(skOrd.data.items.find((i) => i.product_id === boiledEggs.id).variant_name, '2 Eggs (1 Plate)', 'Single-variant kitchen item auto-records serving variant');
+
+// Atomic insufficient-stock check on Packed Snacks (requesting 8 when only 7 remain -> 409, zero stock change)
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: wafers.id, qty: 8 }] } })).status, 409, 'Packed Snacks prevents negative stock');
+assert.equal(stockOf(wafers.id), 7, 'Failed Packed Snacks order left stock untouched');
+
+// Cancel & Restore test for Packed Snacks
+const snCancelOrd = await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: saltedPeanuts.id, qty: 2 }] } });
+assert.equal(snCancelOrd.status, 201);
+assert.equal(stockOf(saltedPeanuts.id), 3);
+await req(`/api/orders/${snCancelOrd.data.id}/status`, { method: 'POST', token: btTok, body: { status: 'cancelled', note: 'Customer cancelled peanuts' } });
+assert.equal(stockOf(saltedPeanuts.id), 5, 'Cancelled Packed Snacks order restored all 2 packets');
+
+// Admin updates variants & enables inventory tracking on a Kitchen item
+const updVars = await req(`/api/products/${mixPakoda.id}/variants`, {
+  method: 'PUT', token: adminTok,
+  body: {
+    variants: [
+      { id: halfPakoda.id, name: 'Half Plate', portion_label: 'Half Plate', selling_price: 55, active: true },
+      { id: fullPakoda.id, name: 'Full Plate', portion_label: 'Full Plate', selling_price: 85, active: true },
+    ],
+  },
+});
+assert.equal(updVars.status, 200);
+assert.equal(updVars.data.variants.find((v) => v.id === fullPakoda.id).selling_price, 85, 'Admin updated variant selling price');
+// Repeat-preview picks up the NEW live variant price (₹85 instead of ₹80)
+const skRepeat = (await req(`/api/orders/${skOrd.data.id}/repeat-preview?mode=full`, { token: adminTok })).data;
+const repFullPak = skRepeat.items.find((i) => i.variant_id === fullPakoda.id);
+assert.equal(repFullPak.current_unit_price, 85, 'Repeat preview uses live updated variant price ₹85');
+assert.equal(repFullPak.price_changed, true);
+
+// Admin enables inventory tracking on Boiled Eggs -> stock 0 now blocks order until stock is added
+await req(`/api/products/${boiledEggs.id}`, { method: 'PUT', token: adminTok, body: { track_inventory: true } });
+assert.equal((await req('/api/orders', { method: 'POST', token: btTok, body: { items: [{ product_id: boiledEggs.id, qty: 1 }] } })).status, 409, 'Enabling inventory tracking enforces stock availability');
+await req(`/api/products/${boiledEggs.id}`, { method: 'PUT', token: adminTok, body: { track_inventory: false } });
+
+// Verify Daily Sales Report & Packed Snacks / Kitchen Report show separate identifiable sales + selected variants
+const dailySk = (await req('/api/reports/daily', { token: adminTok })).data;
+assert(dailySk.totals.packed_snacks >= 60, 'Daily Sales Report separately totals Packed Snacks');
+assert(dailySk.totals.kitchen_food >= 280, 'Daily Sales Report separately totals Kitchen / Food');
+const skRep = (await req('/api/reports/snacks_kitchen', { token: adminTok })).data;
+assert(skRep.rows.some((r) => r.category === 'Packed Snacks' && r.product_name === 'Cream & Onion Wafers' && r.qty === 3 && r.total_sales === 60), 'Packed Snacks & Kitchen report records packet sales');
+assert(skRep.rows.some((r) => r.category === 'Kitchen / Food' && r.product_name === 'Mix Veg Pakoda' && r.variant === 'Full Plate' && r.qty === 2 && r.selling_price === 80 && r.total_sales === 160), 'Report records exact kitchen variant, selling price & total');
+
+console.log('7. Dashboard (incl. Guest Cash/UPI analytics) & all 17 Reports (JSON + XLSX + PDF)…');
 const dash = (await req('/api/dashboard', { token: adminTok })).data;
 assert(dash.kpi.orders > 0 && dash.valuation.cost > 0);
 assert(dash.guestPayments.cash.revenue > 0 && dash.guestPayments.upi.revenue > 0, 'Dashboard tracks Guest Cash & UPI revenue');
 const types = (await req('/api/reports/types', { token: adminTok })).data;
-assert.equal(types.length, 16);
+assert.equal(types.length, 17);
 for (const t of types) {
   const j = await req(`/api/reports/${t.key}`, { token: adminTok });
   assert.equal(j.status, 200, `JSON report ${t.key}`);

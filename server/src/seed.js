@@ -8,6 +8,7 @@ import { STATION_OFFICERS } from './officers-data.js';
 import { STATION_ALCOHOL } from './alcohol-data.js';
 import { STATION_SUNDRIES } from './sundries-data.js';
 import { STATION_MOCKTAILS, STATION_PACKAGED_BEVERAGES, STATION_LOCAL_MISC } from './mocktails-data.js';
+import { STATION_PACKED_SNACKS, STATION_KITCHEN_ITEMS } from './snacks-kitchen-data.js';
 
 const svg = (label, color, kind) => {
   const shape = kind === 'bottle'
@@ -25,7 +26,8 @@ const CATS = [
   ['Alcohol', 3, 1, 5],
   ['Mocktails', 5, 2, 10],
   ['Soft Drinks', 24, 10, 10],
-  ['Food', 10, 4, 10],
+  ['Packed Snacks', 10, 4, 10],
+  ['Kitchen / Food', 10, 4, 10],
   ['Cigarettes', 10, 3, 7.5],
   ['Miscellaneous', 10, 3, 10],
 ];
@@ -48,9 +50,9 @@ const PRODUCTS = [
   ['Soda 750ml', 'Soft Drinks', 'Soda', 'Fizz', 750, 'unit', 0, 18, 35, 0, 80, '#d1d5db', 'bottle', 'Club soda'],
   ['Tonic Water', 'Soft Drinks', 'Soda', 'Fizz', 300, 'unit', 0, 35, 60, 0, 9, '#cffafe', 'can', 'Indian tonic water'],
   ['Mineral Water 1L', 'Soft Drinks', 'Water', 'Pure', 1000, 'unit', 0, 15, 30, 0, 60, '#60a5fa', 'bottle', 'Packaged drinking water'],
-  ['Roasted Peanuts', 'Food', 'Packed', 'House', 0, 'packet', 0, 30, 80, 0, 40, '#d97706', 'snack', 'Salted & masala peanuts'],
-  ['Chicken Tikka', 'Food', 'Non-Veg', 'Kitchen', 0, 'plate', 0, 120, 250, 0, 25, '#dc2626', 'snack', '6 pieces, mint chutney'],
-  ['French Fries', 'Food', 'Veg', 'Kitchen', 0, 'plate', 0, 40, 120, 0, 3, '#fbbf24', 'snack', 'Salted fries'],
+  ['Roasted Peanuts', 'Packed Snacks', null, 'House', 0, 'packet', 0, 30, 80, 0, 40, '#d97706', 'snack', 'Salted & masala peanuts'],
+  ['Chicken Tikka', 'Kitchen / Food', 'Non-Veg', 'Kitchen', 0, 'plate', 0, 120, 250, 0, 25, '#dc2626', 'snack', '6 pieces, mint chutney'],
+  ['French Fries', 'Kitchen / Food', 'Veg', 'Kitchen', 0, 'plate', 0, 40, 120, 0, 3, '#fbbf24', 'snack', 'Salted fries'],
 ];
 
 const USERS = [
@@ -254,8 +256,10 @@ export function seedStation() {
       }
     }
 
-    // 54 Sundries Items (Soft Drinks 10%, Food 10%, Cigarettes 7.5%, Miscellaneous stocked items @ cost / Tonic Water @ ₹88)
-    for (const [, catName, subCat, foodType, name, unit, qty, purchaseRate, desc, imgFile, fav] of STATION_SUNDRIES) {
+    // 54 Sundries Items (Soft Drinks 10%, Packed Snacks / Kitchen / Food 10%, Cigarettes 7.5%, Miscellaneous stocked items @ cost / Tonic Water @ ₹88)
+    for (const [, rawCatName, rawSubCat, foodType, name, unit, qty, purchaseRate, desc, imgFile, fav] of STATION_SUNDRIES) {
+      const catName = rawCatName === 'Food' ? (rawSubCat === 'Packed' ? 'Packed Snacks' : 'Kitchen / Food') : rawCatName;
+      const subCat = catName === 'Packed Snacks' ? null : rawSubCat;
       const m = catName === 'Miscellaneous' ? 0 : (marginMap[catName] ?? 0);
       const sellingPrice = name === 'TONIC WATER' ? 88 : Math.round(purchaseRate * (1 + m / 100) * 100) / 100;
       const pid = Number(
@@ -268,6 +272,39 @@ export function seedStation() {
       if (qty > 0) {
         const p = getProduct(pid);
         moveStock({ productId: pid, type: 'opening', qty, unitCost: baseCost(p), userId: adminId, note: `Opening Sundries Stock: ${qty} ${unit}` });
+      }
+    }
+
+    // 7 Packed Snacks (packet-tracked inventory)
+    for (const sn of STATION_PACKED_SNACKS) {
+      const pid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,NULL,'Packed Snacks',?,?,0,?,0,0,0,0,1,?,?,0,0,?,1)`,
+          sn.name, catMap[sn.category], sn.description, resolveImage(sn.name, path.basename(sn.image)),
+          sn.unit, sn.purchase_price, sn.selling_price, sn.favourite,
+        ).lastInsertRowid,
+      );
+      if (sn.opening_stock > 0) {
+        moveStock({ productId: pid, type: 'opening', qty: sn.opening_stock, unitCost: sn.purchase_price, userId: adminId, note: `Opening Stock: ${sn.opening_stock} ${sn.unit}(s)` });
+      }
+    }
+
+    // 11 Kitchen / Food items (track_inventory = 0 initially, with selectable variants)
+    for (const kt of STATION_KITCHEN_ITEMS) {
+      const pid = Number(
+        q.run(
+          `INSERT INTO products(name, category_id, sub_category, food_type, brand, description, image, size_ml, unit, is_peg, is_recipe, party_only, is_local_purchase, track_inventory, purchase_price, selling_price, peg_price, stock, favourite, active)
+           VALUES(?,?,?,?,'Kitchen',?,?,0,?,0,0,0,0,0,0,?,0,0,?,1)`,
+          kt.name, catMap[kt.category], kt.sub_category, kt.food_type, kt.description,
+          resolveImage(kt.name, path.basename(kt.image)), kt.unit, kt.selling_price, kt.favourite,
+        ).lastInsertRowid,
+      );
+      for (const v of kt.variants || []) {
+        q.run(
+          'INSERT OR IGNORE INTO product_variants(product_id, name, portion_label, selling_price, sort, active) VALUES(?,?,?,?,?,1)',
+          pid, v.name, v.portion_label || null, v.selling_price, v.sort || 0,
+        );
       }
     }
 

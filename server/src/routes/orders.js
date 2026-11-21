@@ -33,10 +33,13 @@ function hydrateFavorite(row) {
     const serve = it.serve_type || (p?.is_peg ? 'peg' : 'unit');
     const pegMl = serve === 'peg' ? Number(it.peg_ml || 30) : null;
     const qty = Number(it.qty) || 1;
+    const matchedVar = it.variant_id && d?.variants?.length ? d.variants.find((v) => v.id === Number(it.variant_id) && v.active) : null;
     const unitPrice = p
-      ? serve === 'peg'
-        ? Math.round((p.peg_price * (pegMl || 30)) / 30 * 100) / 100
-        : p.selling_price
+      ? matchedVar
+        ? matchedVar.selling_price
+        : serve === 'peg'
+          ? Math.round((p.peg_price * (pegMl || 30)) / 30 * 100) / 100
+          : p.selling_price
       : 0;
     return {
       product_id: Number(it.product_id),
@@ -44,10 +47,12 @@ function hydrateFavorite(row) {
       image: p?.image || null,
       serve_type: serve,
       peg_ml: pegMl,
+      variant_id: matchedVar?.id ?? (it.variant_id ? Number(it.variant_id) : null),
+      variant_name: matchedVar?.display_label || it.variant_name || null,
       qty,
       unit_price: unitPrice,
       line_total: Math.round(unitPrice * qty * 100) / 100,
-      available: !!d && d.active && d.stock_status !== 'out',
+      available: !!d && d.active && (!it.variant_id || !!matchedVar) && (d.track_inventory === false || d.stock_status !== 'out'),
     };
   });
   const live_total = Math.round(items.reduce((s, i) => s + i.line_total, 0) * 100) / 100;
@@ -78,6 +83,8 @@ r.post('/favorites', requireAuth, (req, res) => {
     product_id: Number(it.product_id),
     serve_type: it.serve_type || 'unit',
     peg_ml: it.serve_type === 'peg' ? Number(it.peg_ml || 30) : null,
+    variant_id: it.variant_id ? Number(it.variant_id) : null,
+    variant_name: it.variant_name || null,
     qty: Math.max(1, Number(it.qty) || 1),
   }));
   const t = now();
@@ -103,6 +110,8 @@ r.put('/favorites/:id', requireAuth, (req, res) => {
       product_id: Number(it.product_id),
       serve_type: it.serve_type || 'unit',
       peg_ml: it.serve_type === 'peg' ? Number(it.peg_ml || 30) : null,
+      variant_id: it.variant_id ? Number(it.variant_id) : null,
+      variant_name: it.variant_name || null,
       qty: Math.max(1, Number(it.qty) || 1),
     })));
   }
@@ -185,6 +194,12 @@ r.get('/:id/repeat-preview', requireAuth, (req, res) => {
     const serve = it.serve_type || (p?.is_peg ? 'peg' : 'unit');
     const pegMl = serve === 'peg' ? Number(it.peg_ml || 30) : null;
     const origQty = Number(it.qty) || 1;
+    const activeVariants = (d?.variants || []).filter((v) => v.active);
+    const matchedVar = it.variant_id
+      ? activeVariants.find((v) => v.id === Number(it.variant_id))
+      : activeVariants.length === 1
+        ? activeVariants[0]
+        : null;
 
     let available = true;
     let unavailable_reason = null;
@@ -195,6 +210,9 @@ r.get('/:id/repeat-preview', requireAuth, (req, res) => {
     if (!p || !p.active) {
       available = false;
       unavailable_reason = 'Item is no longer available on the menu';
+    } else if (it.variant_id && !matchedVar) {
+      available = false;
+      unavailable_reason = `Selected variant (${it.variant_name || 'variant'}) is no longer available`;
     } else if (p.party_only && !isStaffUser) {
       available = false;
       unavailable_reason = 'Restricted to Party Orders only';
@@ -204,7 +222,7 @@ r.get('/:id/repeat-preview', requireAuth, (req, res) => {
     } else if (serve === 'bottle' && p.is_peg && !isStaffUser) {
       available = false;
       unavailable_reason = 'Full bottles can only be issued by the bartender';
-    } else if (!allowNeg && !p.is_local_purchase) {
+    } else if (!allowNeg && !p.is_local_purchase && (p.is_recipe || p.track_inventory !== 0)) {
       if (p.is_recipe) {
         max_available = Math.max(0, Math.floor(Number(d?.stock_display || 0)));
       } else if (serve === 'peg') {
@@ -228,9 +246,11 @@ r.get('/:id/repeat-preview', requireAuth, (req, res) => {
     const current_unit_price = p
       ? p.is_local_purchase
         ? Number(it.unit_price || 0)
-        : serve === 'peg'
-          ? Math.round(((Number(p.peg_price || 0) * (pegMl || 30)) / 30) * 100) / 100
-          : Number(p.selling_price || 0)
+        : matchedVar
+          ? Number(matchedVar.selling_price || 0)
+          : serve === 'peg'
+            ? Math.round(((Number(p.peg_price || 0) * (pegMl || 30)) / 30) * 100) / 100
+            : Number(p.selling_price || 0)
       : Number(it.unit_price || 0);
 
     const prev_unit_price = Number(it.unit_price || 0);
@@ -245,6 +265,8 @@ r.get('/:id/repeat-preview', requireAuth, (req, res) => {
       image: p?.image || null,
       serve_type: serve,
       peg_ml: pegMl,
+      variant_id: matchedVar?.id ?? (it.variant_id ? Number(it.variant_id) : null),
+      variant_name: matchedVar?.display_label || it.variant_name || null,
       original_qty: origQty,
       qty,
       prev_unit_price,
